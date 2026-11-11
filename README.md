@@ -15,6 +15,8 @@ Tap a clip to open it. It has four tabs:
 
 Login: on first visit you paste a **fine-grained token** (this repo only, **Contents: Read and write**, **Actions: Read-only**) and choose a passcode. The token is stored encrypted with that passcode in the browser. After that you log in with the passcode; a login lasts 8 hours or until you close the tab.
 
+**Other devices.** In the page, open "Use on my other devices" and set a password of 10+ characters. Then any phone or computer can log in with your GitHub username and that password, with no token. The token is encrypted with the password (PBKDF2-SHA256, 600k rounds, AES-GCM) and stored at `accounts/<user>.json` on the `status` branch. Anyone who can read the repo can download that file, so the password is the only protection. Use a long one you don't use anywhere else.
+
 The login locks the page, not the repo. While the repo is public, the files in `input/` and `output/` are still visible on github.com.
 
 Each person sees only their own clips, jobs and progress. Uploads are named `<github user>__<time>_<name>`, and jobs are matched to whoever uploaded them. This is a filter in the page, not access control: anyone who can read the repo can still see every file on github.com.
