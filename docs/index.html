@@ -85,6 +85,56 @@ input[type=password], input[type=text] {
 .tabs button[aria-pressed=true] { color: var(--accent); border-color: var(--accent); }
 video { width: 100%; max-width: 100%; border-radius: 8px; background: #000; max-height: 60vh; }
 .ph { border-radius: 8px; background: var(--bg); border: 1px solid var(--line); padding: 28px 12px; text-align: center; }
+.clip { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; background: transparent; color: var(--fg);
+  border: 0; border-top: 1px solid var(--line); border-radius: 0; padding: 16px 4px; font-weight: 500; }
+.clip:first-child { border-top: 0; }
+.clip-text { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.clip-name { font: 500 15px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.when { font: 13px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.chev { color: var(--muted); font-size: 1.4rem; }
+details.fold { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+details.fold > summary { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+
+/* Clip view */
+#studio { max-width: 560px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+#st-main { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+.st-top { display: flex; align-items: center; gap: 12px; }
+.st-head { flex: 1; min-width: 0; display: grid; gap: 2px; }
+#st-title { font: 500 1.05rem var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.st-seg { display: flex; gap: 6px; flex-wrap: wrap; }
+.st-seg button { flex: 1 1 auto; padding: 10px 12px; font-size: 0.9rem; background: transparent; color: var(--muted); border: 1px solid var(--line); }
+.st-seg button[aria-pressed=true] { color: var(--accent); border-color: var(--accent); background: var(--panel); }
+.st-stage { position: relative; width: 100%; max-height: 62vh; margin: 0 auto; border-radius: 10px; overflow: hidden; background: #000; border: 1px solid var(--line); }
+.st-stage canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+#st-2d { touch-action: manipulation; cursor: crosshair; }
+.st-markers { position: absolute; inset: 0; pointer-events: none; }
+.st-dot { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; border: 2px solid #000;
+  color: #000; font: 600 11px/18px var(--mono); text-align: center; box-shadow: 0 0 0 1px #fff; }
+.st-dot.sel { box-shadow: 0 0 0 3px #fff; }
+.st-dot.static { position: static; margin: 0; flex: 0 0 auto; }
+.st-hidden { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.st-transport { display: grid; gap: 10px; }
+.st-trow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.st-trow .when { margin-left: auto; }
+input[type=range] { width: 100%; accent-color: var(--accent); height: 28px; margin: 0; }
+.st-group { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+.st-group > summary { font-weight: 600; color: var(--fg); }
+#st-options { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.st-gbody { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; padding-top: 6px; }
+.st-field { display: grid; gap: 8px; }
+.st-label { font-size: 0.9rem; font-weight: 500; }
+.st-rhead { display: flex; justify-content: space-between; gap: 8px; }
+.st-rval { font: 13px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.st-toggle { display: flex; align-items: center; gap: 10px; font-size: 0.95rem; }
+.st-toggle input { width: 22px; height: 22px; accent-color: var(--accent); }
+.st-prow { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px 12px; align-items: center; padding: 14px 0; border-top: 1px solid var(--line); }
+.st-prow:first-child { border-top: 0; }
+.st-pmid { display: grid; gap: 6px; }
+.st-pval { font: 500 15px var(--mono); font-variant-numeric: tabular-nums; }
+.st-pbtns { grid-column: 2; display: flex; gap: 8px; }
+.st-files { display: grid; gap: 12px; }
+#st-watch { max-height: 62vh; }
 details summary { cursor: pointer; color: var(--accent); font-weight: 500; }
 details[open] summary { margin-bottom: 10px; }
 ol { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; }
@@ -165,18 +215,69 @@ a { color: var(--accent); }
 
     <section>
       <div class="row" style="align-items:center">
-        <h2 style="flex:1">My depth videos</h2>
+        <h2 style="flex:1">My clips</h2>
         <button class="secondary small" id="refresh">Refresh</button>
       </div>
       <div id="results"><p class="muted">Loading…</p></div>
     </section>
 
-    <section>
-      <h2>Recent jobs</h2>
+    <details class="fold">
+      <summary>Recent jobs</summary>
       <div id="runs"><p class="muted">Loading…</p></div>
-    </section>
+    </details>
   </div>
 </main>
+
+<div id="studio" hidden>
+  <div class="st-top">
+    <button class="secondary small" id="st-close">‹ Clips</button>
+    <div class="st-head"><span id="st-title"></span><span class="when" id="st-when"></span></div>
+  </div>
+  <p id="st-status" class="msg"></p>
+  <div id="st-main" hidden>
+    <div class="st-seg" id="st-tabs" role="tablist">
+      <button data-tab="watch">Watch</button><button data-tab="3d">3D</button><button data-tab="points">Points</button><button data-tab="files">Files</button>
+    </div>
+
+    <div id="pane-watch" class="pane">
+      <video id="st-watch" controls playsinline muted loop></video>
+      <div class="st-seg" id="st-wseg"><button data-kind="depth">Depth</button><button data-kind="src">Source</button></div>
+    </div>
+
+    <div id="pane-3d" class="pane" hidden>
+      <div class="st-stage" id="st-stage3d"><canvas id="st-gl"></canvas><div class="st-markers" id="st-m3d"></div></div>
+      <p id="st-glmsg" class="msg bad" hidden></p>
+      <p class="muted">Drag to rotate. Pinch to zoom. Two fingers to move.</p>
+    </div>
+
+    <div id="pane-points" class="pane" hidden>
+      <div class="st-stage" id="st-stage2d"><canvas id="st-2d"></canvas><div class="st-markers" id="st-m2d"></div></div>
+      <p class="muted">Tap the video to drop a point (up to 8). Each one shows how near that spot is on the current frame.</p>
+    </div>
+
+    <div id="st-transport" class="st-transport" hidden>
+      <input id="st-scrub" type="range" min="0" max="1000" value="0" aria-label="Position in clip">
+      <div class="st-trow">
+        <button class="secondary small" id="st-prev" aria-label="Back one frame">‹ Frame</button>
+        <button class="small" id="st-play">Play</button>
+        <button class="secondary small" id="st-next" aria-label="Forward one frame">Frame ›</button>
+        <span class="when" id="st-time"></span>
+      </div>
+    </div>
+
+    <div id="pane-3d-options" class="pane"><div id="st-options"></div></div>
+
+    <div id="pane-points-list" class="pane">
+      <p class="muted" id="st-pempty">No points yet.</p>
+      <div id="st-plist"></div>
+      <button class="secondary" id="st-pclear" hidden>Remove all points</button>
+    </div>
+
+    <div id="pane-files" class="pane" hidden><div id="st-files" class="st-files"></div></div>
+  </div>
+  <video id="st-vd" class="st-hidden" playsinline muted></video>
+  <video id="st-vs" class="st-hidden" playsinline muted></video>
+</div>
 
 <script>
 (() => {
@@ -266,6 +367,7 @@ a { color: var(--accent); }
     show(); refresh(true);
   }
   function logout() {
+    if (window.Studio && Studio.isOpen()) Studio.close();
     token = ""; me = ""; $("who").textContent = ""; ss.set(SESSION, null); clearTimeout(timer);
     for (const u of previews.values()) URL.revokeObjectURL(u);
     previews.clear(); blobs.clear(); lastSig = null;
@@ -538,63 +640,21 @@ a { color: var(--accent); }
     return d.toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
   }
 
-  function resultCard(n, g, zip, autoload) {
-    const box = document.createElement("div"); box.className = "result";
-    const h3 = document.createElement("h3"); h3.textContent = n.replace(USER_RE, "").replace(/^\d{8}-\d{6}_/, ""); box.appendChild(h3);
-    const when = whenOf(n.replace(USER_RE, ""));
-    if (when) { const w = document.createElement("span"); w.className = "when"; w.textContent = when; box.appendChild(w); }
-
-    const paths = { depth: `output/${g.depth.name}`, src: g.src ? `output/${g.src.name}` : null };
-    let kind = "depth";
-    const stage = document.createElement("div"); box.appendChild(stage);
-    const tabs = document.createElement("div"); tabs.className = "tabs";
-    async function view() {
-      [...tabs.children].forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.kind === kind)));
-      const path = paths[kind];
-      if (!previews.has(path)) {
-        stage.innerHTML = '<div class="ph muted">Loading preview…</div>';
-        try { previews.set(path, URL.createObjectURL(await getFile(path, path.split("/").pop()))); }
-        catch (e) { stage.innerHTML = ""; const m = document.createElement("div"); m.className = "ph msg bad"; m.textContent = e.message; stage.appendChild(m); return; }
-      }
-      if (paths[kind] !== path) return;
-      stage.innerHTML = "";
-      const v = document.createElement("video");
-      v.controls = true; v.playsInline = true; v.muted = true; v.loop = true; v.preload = "metadata";
-      v.src = previews.get(path);
-      stage.appendChild(v);
-    }
-    for (const k of ["depth", "src"]) {
-      if (!paths[k]) continue;
-      const b = document.createElement("button");
-      b.dataset.kind = k; b.textContent = k === "depth" ? "Depth" : "Source";
-      b.onclick = () => { kind = k; view(); };
-      tabs.appendChild(b);
-    }
-    if (paths.src) box.appendChild(tabs);
-    if (autoload || previews.has(paths.depth)) view();
-    else {
-      const ph = document.createElement("button"); ph.className = "secondary"; ph.textContent = "Show preview";
-      ph.onclick = view; stage.appendChild(ph);
-      [...tabs.children].forEach((b) => b.setAttribute("aria-pressed", "false"));
-    }
-
-    const row = document.createElement("div"); row.className = "row";
-    for (const k of ["depth", "src"]) {
-      if (!paths[k]) continue;
-      const b = document.createElement("button");
-      if (k === "src") b.className = "secondary";
-      b.dataset.label = b.textContent = k === "depth" ? "Save depth video" : "Save matching source";
-      b.onclick = () => saveVideo(b, paths[k], g[k].name);
-      row.appendChild(b);
-    }
-    box.appendChild(row);
-    if (zip) {
-      const a = document.createElement("a"); a.className = "btn secondary"; a.href = zip.browser_download_url;
-      a.textContent = `Download 16-bit PNG frames (${(zip.size / 1048576).toFixed(0)} MB zip)`;
-      box.appendChild(a);
-    }
-    return box;
+  function resultRow(n, g, zip) {
+    const title = n.replace(USER_RE, "").replace(/^\d{8}-\d{6}_/, ""), when = whenOf(n.replace(USER_RE, ""));
+    const b = document.createElement("button"); b.className = "clip";
+    b.innerHTML = '<span class="clip-text"><span class="clip-name"></span><span class="when"></span></span><span class="chev" aria-hidden="true">›</span>';
+    b.querySelector(".clip-name").textContent = title;
+    b.querySelector(".when").textContent = when;
+    const file = (f) => f && { name: f.name, path: `output/${f.name}` };
+    b.onclick = () => Studio.open({ name: n, title, when, depth: file(g.depth), src: file(g.src), zip });
+    return b;
   }
+  function urlFor(path, file) {
+    if (!previews.has(path)) previews.set(path, URL.createObjectURL(file));
+    return previews.get(path);
+  }
+  window.DP = { getFile, saveVideo, urlFor };
 
   let lastSig = null;
   async function loadResults() {
@@ -620,7 +680,7 @@ a { color: var(--accent); }
       lastSig = sig;
       if (!names.length) { el.innerHTML = '<p class="muted">Nothing yet. Finished depth videos show up here.</p>'; return; }
       el.innerHTML = "";
-      names.forEach((n, i) => el.appendChild(resultCard(n, groups[n], zips[n], i === 0)));
+      names.forEach((n) => el.appendChild(resultRow(n, groups[n], zips[n])));
     } catch (e) {
       if (!token) return;
       lastSig = null; el.innerHTML = "";
@@ -653,5 +713,6 @@ a { color: var(--accent); }
   if (token) refresh(true);
 })();
 </script>
+<script src="studio.js"></script>
 </body>
 </html>

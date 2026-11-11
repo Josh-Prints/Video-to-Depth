@@ -7,6 +7,12 @@ Upload a video to `input/`. GitHub Actions runs [Video Depth Anything](https://g
 
 Everything happens on that page: log in, upload a clip, watch a live progress bar with a time estimate, preview the depth and source videos, save them to your phone, and download the 16-bit PNG frames as a zip. You can close it while a job runs.
 
+Tap a clip to open it. It has four tabs:
+- **Watch**: the depth and source videos.
+- **3D**: the depth video as a 3D surface you can rotate and zoom, with options for shape, colour, a cut plane, camera and playback.
+- **Points**: tap the source video to drop up to 8 points and read how near each spot is on the current frame. "Cut here" puts the 3D cut plane at that point's depth.
+- **Files**: save the videos and download the 16-bit PNG frames.
+
 Login: on first visit you paste a **fine-grained token** (this repo only, **Contents: Read and write**, **Actions: Read-only**) and choose a passcode. The token is stored encrypted with that passcode in the browser. After that you log in with the passcode; a login lasts 8 hours or until you close the tab.
 
 The login locks the page, not the repo. While the repo is public, the files in `input/` and `output/` are still visible on github.com.
