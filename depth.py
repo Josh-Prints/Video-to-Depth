@@ -137,7 +137,8 @@ def main():
         else:
             print(f"Skipping {f}: unknown extension.")
     if not vids:
-        sys.exit("No video found in input/")
+        print("No video found in input/. Nothing to do.")
+        return
 
     os.makedirs("output", exist_ok=True)
     run = run_space if BACKEND == "space" else run_local
