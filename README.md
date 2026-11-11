@@ -11,7 +11,11 @@ Login: on first visit you paste a **fine-grained token** (this repo only, **Cont
 
 The login locks the page, not the repo. While the repo is public, the files in `input/` and `output/` are still visible on github.com.
 
-Progress is published by the workflow to `progress.json` on the `status` branch. PNG zips are attached to releases tagged `png-<name>`.
+Each person sees only their own clips, jobs and progress. Uploads are named `<github user>__<time>_<name>`, and jobs are matched to whoever uploaded them. This is a filter in the page, not access control: anyone who can read the repo can still see every file on github.com.
+
+Several uploads are processed at the same time, each in its own run.
+
+Progress is published by each run to `runs/<run id>.json` on the `status` branch. PNG zips are attached to releases tagged `png-<name>`.
 
 ## Or upload through github.com
 1. On github.com, open this repo, tap **Add file → Upload files**, pick your clip, and tap **Commit changes**.
