@@ -29,9 +29,7 @@ on:
         default: "1280"
 permissions:
   contents: write
-concurrency:
-  group: depth
-  cancel-in-progress: false
+# Runs are independent, so several uploads process at the same time.
 env:
   BACKEND: ${{ inputs.backend || 'local' }}
   ENCODER: ${{ inputs.encoder || 'vits' }}
@@ -42,6 +40,15 @@ jobs:
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
+        with: { fetch-depth: 2 }
+
+      - name: Find the videos this push added
+        id: pick
+        if: github.event_name == 'push'
+        run: |
+          files=$(git -c core.quotepath=off diff --name-only --diff-filter=AM HEAD~1 HEAD -- input/ | sed 's#.*/##' | paste -sd, -)
+          echo "files=$files" >> "$GITHUB_OUTPUT"
+          echo "Videos in this push: ${files:-none}"
       - uses: actions/setup-python@v5
         with: { python-version: "3.11", cache: pip, cache-dependency-path: requirements*.txt }
 
@@ -77,7 +84,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           GH_TOKEN: ${{ github.token }}
-          ONLY_FILE: ${{ inputs.file }}
+          ONLY_FILE: ${{ inputs.file || steps.pick.outputs.files }}
           FORCE: ${{ inputs.force }}
           MAX_FPS: ${{ inputs.max_fps }}
           MAX_RES: ${{ inputs.max_res }}
@@ -90,8 +97,12 @@ jobs:
           git add output
           git diff --cached --quiet && { echo "Nothing to commit"; exit 0; }
           git commit -m "Add depth video"
-          git pull --rebase
-          git push
+          # Other runs may push at the same moment: retry until ours lands.
+          for i in 1 2 3 4 5 6; do
+            git pull --rebase && git push && exit 0
+            sleep $((i * 5))
+          done
+          echo "Could not push results"; exit 1
 
       - uses: actions/upload-artifact@v4
         if: always()

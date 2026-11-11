@@ -25,18 +25,20 @@ MAX_FPS = int(os.environ.get("MAX_FPS") or 30)
 ENCODER = os.environ.get("ENCODER") or "vits"           # vits (fast) or vitl (better, much slower on CPU)
 PNG16 = (os.environ.get("PNG16") or "true").lower() == "true"
 FORCE = (os.environ.get("FORCE") or "false").lower() == "true"
-ONLY = (os.environ.get("ONLY_FILE") or "").strip()
+ONLY = [os.path.basename(x.strip()) for x in (os.environ.get("ONLY_FILE") or "").split(",") if x.strip()]
+EVENT = os.environ.get("GITHUB_EVENT_NAME") or ""
 VDA_DIR = os.environ.get("VDA_DIR") or "vda"             # clone of DepthAnything/Video-Depth-Anything
 ARTIFACT_DIR = "artifact"
 
 
 class Progress:
-    """Publishes progress.json on the `status` branch so the upload page can show a live bar.
+    """Publishes runs/<run id>.json on the `status` branch so the upload page can show a live bar.
     Never raises: progress reporting must not be able to break a job."""
     def __init__(self):
         self.token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
         self.repo = os.environ.get("GITHUB_REPOSITORY")
         self.state = {"run_id": os.environ.get("GITHUB_RUN_ID"), "started": int(time.time())}
+        self.path = f"/contents/runs/{self.state['run_id']}.json"
         self.sha = None
         self.ready = False
 
@@ -59,7 +61,7 @@ class Progress:
                 raise
             self._api("POST", "/git/refs", {"ref": "refs/heads/status", "sha": os.environ["GITHUB_SHA"]})
         try:
-            self.sha = self._api("GET", "/contents/progress.json?ref=status")["sha"]
+            self.sha = self._api("GET", self.path + "?ref=status")["sha"]
         except urllib.error.HTTPError as e:
             if e.code != 404:
                 raise
@@ -77,7 +79,7 @@ class Progress:
                     "content": base64.b64encode(json.dumps(self.state).encode()).decode()}
             if self.sha:
                 body["sha"] = self.sha
-            self.sha = self._api("PUT", "/contents/progress.json", body)["content"]["sha"]
+            self.sha = self._api("PUT", self.path, body)["content"]["sha"]
         except Exception as e:
             self.ready = False
             print(f"(progress update skipped: {e})")
@@ -219,7 +221,10 @@ def run_space(clean, name):
 def main():
     files = sorted(f for f in glob.glob("input/*") if os.path.isfile(f) and not f.endswith(".gitkeep"))
     if ONLY:
-        files = [f for f in files if os.path.basename(f) == os.path.basename(ONLY)]
+        files = [f for f in files if os.path.basename(f) in ONLY]
+    elif EVENT == "push":      # each upload's run handles only the files from its own push
+        print("This push added no video to input/. Nothing to do.")
+        return
     vids = []
     for f in files:
         ext = os.path.splitext(f)[1].lower()
