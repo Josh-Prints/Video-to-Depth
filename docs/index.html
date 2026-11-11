@@ -93,6 +93,7 @@ video { width: 100%; max-width: 100%; border-radius: 8px; background: #000; max-
 .when { font: 13px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
 .chev { color: var(--muted); font-size: 1.4rem; }
 details.fold { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+.fold-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding-top: 12px; }
 details.fold > summary { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
 
 /* Clip view */
@@ -155,6 +156,20 @@ a { color: var(--accent); }
     <div class="ramp-labels" aria-hidden="true"><span>near</span><span>far</span></div>
   </header>
 
+  <!-- New device: log in with the account saved from another device -->
+  <section id="remote" hidden>
+    <h2>Log in</h2>
+    <label class="field">GitHub username
+      <input id="r-user" type="text" autocomplete="username" autocapitalize="off" spellcheck="false">
+    </label>
+    <label class="field">Password
+      <input id="r-pass" type="password" autocomplete="current-password">
+    </label>
+    <button id="do-remote">Log in</button>
+    <p id="remote-msg" class="msg"></p>
+    <button class="link" id="to-setup">First time on any device? Set up with a GitHub token</button>
+  </section>
+
   <!-- First visit: token + choose a passcode -->
   <section id="setup" hidden>
     <h2>Set up login</h2>
@@ -180,6 +195,7 @@ a { color: var(--accent); }
     </label>
     <button id="do-setup">Save and log in</button>
     <p id="setup-msg" class="msg"></p>
+    <button class="link" id="to-remote">Already set up on another device? Log in with your password</button>
   </section>
 
   <!-- Every later visit: passcode -->
@@ -220,6 +236,23 @@ a { color: var(--accent); }
       </div>
       <div id="results"><p class="muted">Loading…</p></div>
     </section>
+
+    <details class="fold" id="sync">
+      <summary>Use on my other devices</summary>
+      <div class="fold-body">
+        <p id="sync-state" class="muted">Checking…</p>
+        <p class="muted">When this is on, you log in on any phone or computer with your GitHub username and this password. No token needed there.</p>
+        <p class="muted">How it works: your token is scrambled with the password and saved in the repo. The password is the only thing protecting it, so make it long and don't reuse it.</p>
+        <label class="field">Password (10+ characters)
+          <input id="sync-pass" type="password" autocomplete="new-password">
+        </label>
+        <div class="row">
+          <button id="sync-on">Turn on</button>
+          <button class="secondary" id="sync-off" hidden>Turn off</button>
+        </div>
+        <p id="sync-msg" class="msg"></p>
+      </div>
+    </details>
 
     <details class="fold">
       <summary>Recent jobs</summary>
@@ -305,20 +338,45 @@ a { color: var(--accent); }
   // ---------- passcode-encrypted token ----------
   const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
   const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
-  async function keyFrom(pass, salt) {
+  async function keyFrom(pass, salt, iter) {
     const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pass), "PBKDF2", false, ["deriveKey"]);
-    return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: 250000, hash: "SHA-256" },
+    return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: iter, hash: "SHA-256" },
       base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
   }
-  async function seal(tok, pass) {
+  async function encryptToken(tok, pass, iter) {
     const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
-    const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await keyFrom(pass, salt), new TextEncoder().encode(tok));
-    ls.set(VAULT, JSON.stringify({ salt: b64(salt), iv: b64(iv), ct: b64(ct) }));
+    const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await keyFrom(pass, salt, iter), new TextEncoder().encode(tok));
+    return { v: 1, iter, salt: b64(salt), iv: b64(iv), ct: b64(ct) };
   }
-  async function unseal(pass) {
-    const v = JSON.parse(ls.get(VAULT));
-    const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(v.iv) }, await keyFrom(pass, unb64(v.salt)), unb64(v.ct));
+  async function decryptVault(v, pass) {
+    const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(v.iv) }, await keyFrom(pass, unb64(v.salt), v.iter || 250000), unb64(v.ct));
     return new TextDecoder().decode(pt);
+  }
+  const seal = async (tok, pass) => ls.set(VAULT, JSON.stringify(await encryptToken(tok, pass, 250000)));
+  const unseal = (pass) => decryptVault(JSON.parse(ls.get(VAULT)), pass);
+
+  // ---------- login from other devices ----------
+  // The token, encrypted with the user's password, is stored in the repo at accounts/<user>.json on the
+  // `status` branch. Anyone who can read the repo can download it, so the password is the only protection:
+  // that's why it must be long, and why it uses more key-stretching rounds than the local copy.
+  const SYNC_MIN = 10, SYNC_ITER = 600000;
+  const acctPath = (user) => `/contents/accounts/${encodeURIComponent(user.toLowerCase())}.json`;
+  async function fetchAccount(user) {
+    const r = await fetch(`${API}${acctPath(user)}?ref=status`, { cache: "no-store", headers: { Accept: "application/vnd.github.raw+json" } });
+    if (r.status === 404) return null;
+    if (!r.ok) throw new Error(r.status === 403 ? "GitHub is rate-limiting this network. Try again in a few minutes." : `GitHub said ${r.status}.`);
+    return r.json();
+  }
+  async function accountSha() {
+    try { return (await api(`${acctPath(me)}?ref=status`)).sha; } catch (e) { if (e.status === 404) return null; throw e; }
+  }
+  async function ensureStatusBranch() {
+    try { await api("/git/ref/heads/status"); }
+    catch (e) {
+      if (e.status !== 404) throw e;
+      const main = await api("/git/ref/heads/main");
+      await api("/git/refs", { method: "POST", body: JSON.stringify({ ref: "refs/heads/status", sha: main.object.sha }) });
+    }
   }
 
   let token = "", me = "";
@@ -341,12 +399,16 @@ a { color: var(--accent); }
   }
 
   // ---------- auth screens ----------
-  let timer = null;
+  let timer = null, freshMode = "remote";
   function show() {
     const legacy = ls.get(LEGACY), hasVault = !!ls.get(VAULT);
     $("app").hidden = !token; $("logout").hidden = !token;
     $("login").hidden = !!token || !hasVault;
-    $("setup").hidden = !!token || hasVault;
+    const fresh = !token && !hasVault;
+    if (legacy) freshMode = "setup";
+    $("setup").hidden = !(fresh && freshMode === "setup");
+    $("remote").hidden = !(fresh && freshMode === "remote");
+    $("to-remote").hidden = !!legacy;
     if (!token && !hasVault && legacy) {   // came from the earlier version: token already saved, just add a passcode
       $("token-field").hidden = true; $("token-help").hidden = true;
       $("setup-intro").textContent = "Your token is already saved on this phone. Choose a passcode to lock it. From now on you log in with the passcode.";
@@ -418,12 +480,68 @@ a { color: var(--accent); }
   };
   $("pass").addEventListener("keydown", (e) => { if (e.key === "Enter") $("do-login").click(); });
 
+  $("to-setup").onclick = () => { freshMode = "setup"; show(); };
+  $("to-remote").onclick = () => { freshMode = "remote"; show(); };
+
+  $("do-remote").onclick = async () => {
+    const msg = $("remote-msg"); msg.className = "msg bad";
+    const user = $("r-user").value.trim().replace(/^@/, ""), pass = $("r-pass").value;
+    if (!user || !pass) { msg.textContent = "Enter your GitHub username and password."; return; }
+    if (!/^[A-Za-z0-9-]+$/.test(user)) { msg.textContent = "That's not a GitHub username."; return; }
+    msg.className = "msg"; msg.textContent = "Checking…";
+    try {
+      const vault = await fetchAccount(user);
+      if (!vault) throw new Error("No saved login for that username. On a device where you're already logged in, open \"Use on my other devices\" and turn it on.");
+      let tok;
+      try { tok = await decryptVault(vault, pass); } catch { throw new Error("Wrong password."); }
+      await seal(tok, pass);                 // from now on this device asks for the same password
+      $("r-pass").value = ""; msg.textContent = "";
+      await startSession(tok);
+    } catch (e) { msg.className = "msg bad"; msg.textContent = e.message; }
+  };
+  $("r-pass").addEventListener("keydown", (e) => { if (e.key === "Enter") $("do-remote").click(); });
+
+  async function syncState() {
+    const st = $("sync-state");
+    try {
+      const on = !!(await accountSha());
+      st.textContent = on ? "On. Other devices can log in with your username and password." : "Off. Only devices you set up with a token can log in.";
+      $("sync-off").hidden = !on; $("sync-on").textContent = on ? "Change password" : "Turn on";
+    } catch (e) { st.textContent = `Couldn't check: ${e.message}`; }
+  }
+  $("sync").addEventListener("toggle", () => { if ($("sync").open) syncState(); });
+  $("sync-on").onclick = async () => {
+    const msg = $("sync-msg"), pass = $("sync-pass").value; msg.className = "msg bad";
+    if (pass.length < SYNC_MIN) { msg.textContent = `Use at least ${SYNC_MIN} characters. A short password here could be guessed by anyone who downloads the file.`; return; }
+    msg.className = "msg"; msg.textContent = "Saving…";
+    try {
+      await ensureStatusBranch();
+      const body = { message: `Save login for ${me}`, branch: "status", content: btoa(JSON.stringify(await encryptToken(token, pass, SYNC_ITER))) };
+      const sha = await accountSha(); if (sha) body.sha = sha;
+      await api(acctPath(me), { method: "PUT", body: JSON.stringify(body) });
+      await seal(token, pass);               // one password everywhere, this device included
+      $("sync-pass").value = ""; msg.className = "msg ok";
+      msg.textContent = "On. This is now your password on this device too.";
+      syncState();
+    } catch (e) { msg.className = "msg bad"; msg.textContent = `Couldn't save: ${e.message}`; }
+  };
+  $("sync-off").onclick = async () => {
+    const msg = $("sync-msg"); msg.className = "msg"; msg.textContent = "Removing…";
+    try {
+      const sha = await accountSha();
+      if (sha) await api(acctPath(me), { method: "DELETE", body: JSON.stringify({ message: `Remove login for ${me}`, branch: "status", sha }) });
+      msg.className = "msg ok"; msg.textContent = "Off. Devices already logged in stay logged in until you reset them.";
+      syncState();
+    } catch (e) { msg.className = "msg bad"; msg.textContent = `Couldn't remove: ${e.message}`; }
+  };
+
   let resetArmed = false;
   $("reset").onclick = () => {
     if (!resetArmed) { resetArmed = true; $("reset").textContent = "Tap again to erase the saved login. You'll need a GitHub token to set up again."; return; }
     resetArmed = false; $("reset").textContent = "Forgot passcode? Reset and set up again";
     ls.set(VAULT, null); ls.set(LEGACY, null); $("login-msg").textContent = "";
     $("token-field").hidden = false; $("token-help").hidden = false;
+    freshMode = "remote";
     show();
   };
 
