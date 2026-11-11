@@ -30,8 +30,10 @@ body {
   padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
 }
 main { max-width: 560px; margin: 0 auto; display: grid; gap: 16px; }
+#app { display: grid; gap: 16px; }
 header { display: grid; gap: 6px; }
-h1 { font-size: 1.6rem; line-height: 1.2; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+.top { display: flex; align-items: center; gap: 12px; }
+h1 { font-size: 1.6rem; line-height: 1.2; margin: 0; font-weight: 600; letter-spacing: -0.01em; flex: 1; }
 .ramp { height: 6px; border-radius: 3px; background: linear-gradient(90deg, #fff, #000); border: 1px solid var(--line); }
 .ramp-labels { display: flex; justify-content: space-between; font: 12px var(--mono); color: var(--muted); }
 section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: grid; gap: 12px; min-width: 0; }
@@ -43,151 +45,273 @@ button, .btn {
   background: var(--accent); color: var(--accent-fg); text-align: center; text-decoration: none; display: inline-block;
 }
 button.secondary, .btn.secondary { background: transparent; color: var(--accent); border: 1px solid var(--line); }
+button.small { padding: 8px 12px; font-size: 0.9rem; flex: 0 0 auto; }
+button.link { background: none; color: var(--muted); padding: 4px; font: 0.85rem var(--sans); text-decoration: underline; }
 button:disabled { opacity: 0.5; cursor: default; }
 button:focus-visible, .btn:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; }
 .row > * { flex: 1 1 auto; }
+label.field { display: grid; gap: 4px; font-size: 0.9rem; font-weight: 500; }
 input[type=password], input[type=text] {
-  width: 100%; font: 15px var(--mono); padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+  width: 100%; font: 16px var(--mono); padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--fg);
 }
 .picker { border: 2px dashed var(--line); border-radius: 12px; padding: 20px; text-align: center; display: grid; gap: 6px; cursor: pointer; }
 .picker input { display: none; }
 .picker strong { font-size: 1.05rem; }
 .file { font: 14px var(--mono); word-break: break-all; }
-progress { width: 100%; height: 8px; accent-color: var(--accent); }
+progress { width: 100%; height: 10px; accent-color: var(--accent); }
 .msg { font-size: 0.95rem; }
 .msg.ok { color: var(--ok); } .msg.bad { color: var(--bad); } .msg.warn { color: var(--warn); }
+.now { display: grid; gap: 8px; }
+.now .head { display: flex; gap: 10px; align-items: baseline; }
+.now .name { flex: 1; min-width: 0; font: 500 15px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.now .pct { font: 500 1.4rem var(--mono); font-variant-numeric: tabular-nums; }
+.now .meta { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; font: 13px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
 .run { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
-.run:first-of-type { border-top: 0; }
+.run:first-child { border-top: 0; }
 .run .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.95rem; }
 .run .time { font: 13px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
-.run a { grid-column: 2 / 4; font-size: 0.85rem; color: var(--accent); }
+.run .err { grid-column: 1 / 4; font-size: 0.85rem; color: var(--bad); word-break: break-word; }
 .pill { font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: 0.06em; padding: 3px 8px; border-radius: 999px; border: 1px solid currentColor; }
 .pill.ok { color: var(--ok); } .pill.bad { color: var(--bad); } .pill.warn { color: var(--warn); } .pill.muted { color: var(--muted); }
-.result { display: grid; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
-.result:first-of-type { border-top: 0; padding-top: 0; }
+.result { display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+.result:first-child { border-top: 0; padding-top: 0; }
 .result h3 { margin: 0; font: 500 15px var(--mono); word-break: break-all; }
+.result .when { font: 13px var(--mono); color: var(--muted); }
+.tabs { display: flex; gap: 6px; }
+.tabs button { flex: 1; padding: 8px; font-size: 0.85rem; background: transparent; color: var(--muted); border: 1px solid var(--line); }
+.tabs button[aria-pressed=true] { color: var(--accent); border-color: var(--accent); }
 video { width: 100%; max-width: 100%; border-radius: 8px; background: #000; max-height: 60vh; }
+.ph { border-radius: 8px; background: var(--bg); border: 1px solid var(--line); padding: 28px 12px; text-align: center; }
 details summary { cursor: pointer; color: var(--accent); font-weight: 500; }
 details[open] summary { margin-bottom: 10px; }
 ol { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; }
 code { font: 0.9em var(--mono); background: var(--bg); padding: 1px 5px; border-radius: 4px; }
+a { color: var(--accent); }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 </style>
 </head>
 <body>
 <main>
   <header>
-    <h1>Depth Pass</h1>
+    <div class="top">
+      <h1>Depth Pass</h1>
+      <button class="secondary small" id="logout" hidden>Log out</button>
+    </div>
     <div class="ramp" aria-hidden="true"></div>
     <div class="ramp-labels" aria-hidden="true"><span>near</span><span>far</span></div>
-    <p class="muted">Upload a clip. GitHub turns it into a depth video. You can close this page and come back later.</p>
   </header>
 
+  <!-- First visit: token + choose a passcode -->
   <section id="setup" hidden>
-    <h2>One-time setup</h2>
-    <p>Paste a GitHub token so this page can upload to <code id="repo-name"></code>. It's saved only in this browser.</p>
-    <details>
+    <h2>Set up login</h2>
+    <p id="setup-intro">Paste a GitHub token for <code class="repo-name"></code> and choose a passcode. After this you log in with just the passcode.</p>
+    <details id="token-help">
       <summary>How to make the token</summary>
       <ol>
-        <li>Open <a id="token-link" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">github.com → New fine-grained token</a>.</li>
+        <li>Open <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">github.com → New fine-grained token</a>.</li>
         <li>Name it <code>depth-pass</code>. Pick an expiry.</li>
-        <li><b>Repository access</b>: Only select repositories → <code id="repo-name-2"></code>.</li>
+        <li><b>Repository access</b>: Only select repositories → <code class="repo-name"></code>.</li>
         <li><b>Permissions → Repository</b>: <b>Contents</b> = Read and write, <b>Actions</b> = Read-only.</li>
         <li>Generate, copy, paste below.</li>
       </ol>
     </details>
-    <input id="token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="github_pat_…">
-    <button id="save-token">Save token</button>
-    <p id="token-msg" class="msg"></p>
-  </section>
-
-  <section id="upload" hidden>
-    <h2>New clip</h2>
-    <label class="picker" for="file">
-      <input id="file" type="file" accept="video/*,.mov,.mp4,.m4v,.mkv,.webm,.avi,.3gp,.mts,.ts">
-      <strong>Choose video</strong>
-      <span class="muted">For the original quality, pick from <b>Files</b> (in Photos, Share → Save to Files first). Max 95 MB.</span>
+    <label class="field" id="token-field">GitHub token
+      <input id="token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="github_pat_…">
     </label>
-    <p id="file-info" class="file" hidden></p>
-    <button id="send" disabled>Upload and make depth</button>
-    <progress id="prog" max="100" value="0" hidden></progress>
-    <p id="up-msg" class="msg"></p>
-    <p class="muted">This repo is public, so anyone can see uploaded clips.</p>
+    <label class="field">Choose a passcode (4+ characters)
+      <input id="new-pass" type="password" autocomplete="new-password">
+    </label>
+    <label class="field">Repeat passcode
+      <input id="new-pass2" type="password" autocomplete="new-password">
+    </label>
+    <button id="do-setup">Save and log in</button>
+    <p id="setup-msg" class="msg"></p>
   </section>
 
-  <section>
-    <div class="row" style="align-items:center">
-      <h2 style="flex:1">Jobs</h2>
-      <button class="secondary" id="refresh" style="flex:0 0 auto;padding:8px 12px;font-size:0.9rem">Refresh</button>
-    </div>
-    <div id="runs"><p class="muted">Loading…</p></div>
-    <p class="muted">Rough guide: about 2 minutes per second of video, plus about a minute of setup.</p>
+  <!-- Every later visit: passcode -->
+  <section id="login" hidden>
+    <h2>Log in</h2>
+    <label class="field">Passcode
+      <input id="pass" type="password" autocomplete="current-password">
+    </label>
+    <button id="do-login">Log in</button>
+    <p id="login-msg" class="msg"></p>
+    <button class="link" id="reset">Forgot passcode? Reset and set up again</button>
   </section>
 
-  <section>
-    <h2>Results</h2>
-    <div id="results"><p class="muted">Loading…</p></div>
-  </section>
+  <div id="app" hidden>
+    <section>
+      <h2>New clip</h2>
+      <label class="picker" for="file">
+        <input id="file" type="file" accept="video/*,.mov,.mp4,.m4v,.mkv,.webm,.avi,.3gp,.mts,.ts">
+        <strong>Choose video</strong>
+        <span class="muted">For the original quality, pick from <b>Files</b> (in Photos, Share → Save to Files first). Max 95 MB.</span>
+      </label>
+      <p id="file-info" class="file" hidden></p>
+      <button id="send" disabled>Upload and make depth</button>
+      <progress id="prog" max="100" value="0" hidden></progress>
+      <p id="up-msg" class="msg"></p>
+    </section>
 
-  <p class="muted" style="text-align:center"><button class="secondary" id="forget" style="padding:6px 10px;font-size:0.85rem" hidden>Forget token</button></p>
+    <section id="now-card" hidden>
+      <h2>Working on it</h2>
+      <div class="now">
+        <div class="head"><span class="name" id="now-name"></span><span class="pct" id="now-pct"></span></div>
+        <progress id="now-bar" max="100" value="0"></progress>
+        <div class="meta"><span id="now-stage"></span><span id="now-eta"></span></div>
+      </div>
+      <p class="muted">You can close this page. The job keeps running and the result shows up below.</p>
+    </section>
+
+    <section>
+      <div class="row" style="align-items:center">
+        <h2 style="flex:1">My depth videos</h2>
+        <button class="secondary small" id="refresh">Refresh</button>
+      </div>
+      <div id="results"><p class="muted">Loading…</p></div>
+    </section>
+
+    <section>
+      <h2>Recent jobs</h2>
+      <div id="runs"><p class="muted">Loading…</p></div>
+    </section>
+  </div>
 </main>
 
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
-  const h = location.hostname.endsWith(".github.io");
-  const OWNER = h ? location.hostname.split(".")[0] : "Josh-Prints";
-  const REPO = h ? (location.pathname.split("/")[1] || "Video-to-Depth") : "Video-to-Depth";
+  const onPages = location.hostname.endsWith(".github.io");
+  const OWNER = onPages ? location.hostname.split(".")[0] : "Josh-Prints";
+  const REPO = onPages ? (location.pathname.split("/")[1] || "Video-to-Depth") : "Video-to-Depth";
   const API = `https://api.github.com/repos/${OWNER}/${REPO}`;
-  const RAW = `https://raw.githubusercontent.com/${OWNER}/${REPO}/main/`;
   const MAX = 95 * 1024 * 1024;
+  const SESSION_MS = 8 * 3600 * 1000;
   const VIDEO_RE = /\.(mp4|mov|m4v|mkv|webm|avi|3gp|mts|m2ts|ts|wmv|flv|mpg|mpeg|hevc|gif)$/i;
-  $("repo-name").textContent = $("repo-name-2").textContent = `${OWNER}/${REPO}`;
+  document.querySelectorAll(".repo-name").forEach((e) => { e.textContent = `${OWNER}/${REPO}`; });
 
-  const store = {
-    get() { try { return localStorage.getItem("depthpass-token") || ""; } catch { return ""; } },
-    set(v) { try { v ? localStorage.setItem("depthpass-token", v) : localStorage.removeItem("depthpass-token"); } catch {} },
+  // ---------- storage ----------
+  const ls = {
+    get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+    set(k, v) { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} },
   };
-  let token = store.get();
+  const ss = {
+    get(k) { try { return sessionStorage.getItem(k); } catch { return null; } },
+    set(k, v) { try { v === null ? sessionStorage.removeItem(k) : sessionStorage.setItem(k, v); } catch {} },
+  };
+  const VAULT = "depthpass-vault", LEGACY = "depthpass-token", SESSION = "depthpass-session";
 
-  function headers() {
-    const hd = { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" };
-    if (token) hd.Authorization = `Bearer ${token}`;
-    return hd;
+  // ---------- passcode-encrypted token ----------
+  const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  async function keyFrom(pass, salt) {
+    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pass), "PBKDF2", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: 250000, hash: "SHA-256" },
+      base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  }
+  async function seal(tok, pass) {
+    const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await keyFrom(pass, salt), new TextEncoder().encode(tok));
+    ls.set(VAULT, JSON.stringify({ salt: b64(salt), iv: b64(iv), ct: b64(ct) }));
+  }
+  async function unseal(pass) {
+    const v = JSON.parse(ls.get(VAULT));
+    const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(v.iv) }, await keyFrom(pass, unb64(v.salt)), unb64(v.ct));
+    return new TextDecoder().decode(pt);
+  }
+
+  let token = "";
+  function headers(extra) {
+    return { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", Authorization: `Bearer ${token}`, ...(extra || {}) };
   }
   async function api(path, opts = {}) {
-    const r = await fetch(API + path, { cache: "no-store", ...opts, headers: { ...headers(), ...(opts.headers || {}) } });
+    const r = await fetch(API + path, { cache: "no-store", ...opts, headers: headers(opts.headers) });
     if (!r.ok) {
       let m = ""; try { m = (await r.json()).message || ""; } catch {}
-      const e = new Error(`${r.status} ${m}`.trim()); e.status = r.status; throw e;
+      const e = new Error(`${r.status} ${m}`.trim()); e.status = r.status;
+      if (r.status === 401 && token) expired();
+      throw e;
     }
     return r.status === 204 ? null : r.json();
   }
 
-  function showMode() {
-    $("setup").hidden = !!token;
-    $("upload").hidden = !token;
-    $("forget").hidden = !token;
+  // ---------- auth screens ----------
+  let timer = null;
+  function show() {
+    const legacy = ls.get(LEGACY), hasVault = !!ls.get(VAULT);
+    $("app").hidden = !token; $("logout").hidden = !token;
+    $("login").hidden = !!token || !hasVault;
+    $("setup").hidden = !!token || hasVault;
+    if (!token && !hasVault && legacy) {   // came from the earlier version: token already saved, just add a passcode
+      $("token-field").hidden = true; $("token-help").hidden = true;
+      $("setup-intro").textContent = "Your token is already saved on this phone. Choose a passcode to lock it. From now on you log in with the passcode.";
+    }
   }
+  function startSession(tok) {
+    token = tok;
+    ss.set(SESSION, JSON.stringify({ token: tok, exp: Date.now() + SESSION_MS }));
+    show(); refresh(true);
+  }
+  function logout() {
+    token = ""; ss.set(SESSION, null); clearTimeout(timer);
+    for (const u of previews.values()) URL.revokeObjectURL(u);
+    previews.clear(); blobs.clear(); lastSig = null;
+    $("results").innerHTML = ""; $("runs").innerHTML = ""; $("now-card").hidden = true;
+    show();
+  }
+  function expired() {
+    logout();
+    $("login-msg").className = "msg bad";
+    $("login-msg").textContent = "GitHub no longer accepts the saved token (expired or revoked). Reset and set up again with a new one.";
+  }
+  $("logout").onclick = logout;
 
-  $("save-token").onclick = async () => {
-    const v = $("token").value.trim();
-    if (!v) return;
-    token = v;
-    $("token-msg").className = "msg"; $("token-msg").textContent = "Checking…";
+  $("do-setup").onclick = async () => {
+    const msg = $("setup-msg"); msg.className = "msg bad";
+    const tok = (ls.get(LEGACY) && $("token-field").hidden) ? ls.get(LEGACY) : $("token").value.trim();
+    const p1 = $("new-pass").value, p2 = $("new-pass2").value;
+    if (!tok) { msg.textContent = "Paste the GitHub token first."; return; }
+    if (p1.length < 4) { msg.textContent = "Passcode needs at least 4 characters."; return; }
+    if (p1 !== p2) { msg.textContent = "The two passcodes don't match."; return; }
+    if (!window.crypto || !crypto.subtle) { msg.textContent = "This browser can't encrypt the token. Open the page over https."; return; }
+    msg.className = "msg"; msg.textContent = "Checking token…";
     try {
-      const repo = await api("");
+      token = tok;
+      const r = await fetch(API, { cache: "no-store", headers: headers() });
+      if (r.status === 401) throw new Error("GitHub rejected that token. Copy it again, the whole thing.");
+      if (!r.ok) throw new Error(`GitHub said ${r.status}. Does the token include this repo?`);
+      const repo = await r.json();
       if (!repo.permissions || !repo.permissions.push) throw new Error("Token can read the repo but can't write to it. Set Contents to Read and write.");
-      store.set(v); $("token").value = ""; $("token-msg").textContent = "";
-      showMode(); refresh();
+      await seal(tok, p1);
+      ls.set(LEGACY, null);
+      $("token").value = $("new-pass").value = $("new-pass2").value = ""; msg.textContent = "";
+      startSession(tok);
     } catch (e) {
-      token = store.get();
-      $("token-msg").className = "msg bad";
-      $("token-msg").textContent = e.status === 401 ? "GitHub rejected that token. Copy it again, the whole thing." : e.message;
+      token = ""; msg.className = "msg bad"; msg.textContent = e.message;
     }
   };
-  $("forget").onclick = () => { store.set(""); token = ""; showMode(); };
+
+  $("do-login").onclick = async () => {
+    const msg = $("login-msg"); msg.className = "msg"; msg.textContent = "";
+    try {
+      const tok = await unseal($("pass").value);
+      $("pass").value = "";
+      startSession(tok);
+    } catch {
+      msg.className = "msg bad"; msg.textContent = "Wrong passcode.";
+    }
+  };
+  $("pass").addEventListener("keydown", (e) => { if (e.key === "Enter") $("do-login").click(); });
+
+  let resetArmed = false;
+  $("reset").onclick = () => {
+    if (!resetArmed) { resetArmed = true; $("reset").textContent = "Tap again to erase the saved login. You'll need a GitHub token to set up again."; return; }
+    resetArmed = false; $("reset").textContent = "Forgot passcode? Reset and set up again";
+    ls.set(VAULT, null); ls.set(LEGACY, null); $("login-msg").textContent = "";
+    $("token-field").hidden = false; $("token-help").hidden = false;
+    show();
+  };
 
   // ---------- upload ----------
   let picked = null;
@@ -195,9 +319,8 @@ code { font: 0.9em var(--mono); background: var(--bg); padding: 1px 5px; border-
     picked = $("file").files[0] || null;
     $("up-msg").textContent = ""; $("up-msg").className = "msg";
     if (!picked) { $("file-info").hidden = true; $("send").disabled = true; return; }
-    const mb = (picked.size / 1048576).toFixed(1);
     $("file-info").hidden = false;
-    $("file-info").textContent = `${picked.name} · ${mb} MB`;
+    $("file-info").textContent = `${picked.name} · ${(picked.size / 1048576).toFixed(1)} MB`;
     if (picked.size > MAX) {
       $("send").disabled = true; $("up-msg").className = "msg bad";
       $("up-msg").textContent = "Too big. GitHub caps files at 100 MB. Film at 1080p 30fps or trim the clip.";
@@ -211,13 +334,12 @@ code { font: 0.9em var(--mono); background: var(--bg); padding: 1px 5px; border-
 
   function safeName(name) {
     const dot = name.lastIndexOf(".");
-    let base = (dot > 0 ? name.slice(0, dot) : name).replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "clip";
+    const base = (dot > 0 ? name.slice(0, dot) : name).replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "clip";
     let ext = dot > 0 ? name.slice(dot).toLowerCase() : ".mov";
     if (!VIDEO_RE.test(ext)) ext = ".mov";
     const d = new Date(), p = (n) => String(n).padStart(2, "0");
     return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}_${base}${ext}`;
   }
-
   function toBase64(file) {
     return new Promise((res, rej) => {
       const fr = new FileReader();
@@ -233,28 +355,28 @@ code { font: 0.9em var(--mono); background: var(--bg); padding: 1px 5px; border-
     $("send").disabled = true; $("file").disabled = true;
     $("up-msg").className = "msg"; $("up-msg").textContent = "Reading file…";
     try {
-      const b64 = await toBase64(picked);
+      const data = await toBase64(picked);
       $("prog").hidden = false; $("prog").value = 0;
       $("up-msg").textContent = "Uploading… keep this page open until it says Uploaded.";
       await new Promise((res, rej) => {
         const x = new XMLHttpRequest();
         x.open("PUT", `${API}/contents/input/${encodeURIComponent(name)}`);
-        Object.entries(headers()).forEach(([k, v]) => x.setRequestHeader(k, v));
-        x.setRequestHeader("Content-Type", "application/json");
+        Object.entries(headers({ "Content-Type": "application/json" })).forEach(([k, v]) => x.setRequestHeader(k, v));
         x.upload.onprogress = (e) => { if (e.lengthComputable) $("prog").value = (e.loaded / e.total) * 100; };
         x.onload = () => {
           if (x.status >= 200 && x.status < 300) return res();
           let m = ""; try { m = JSON.parse(x.responseText).message; } catch {}
-          rej(new Error(x.status === 401 ? "Token expired or revoked. Tap Forget token and add a new one." : `Upload failed (${x.status}${m ? ": " + m : ""}).`));
+          rej(new Error(x.status === 401 ? "GitHub no longer accepts the saved token. Log out, reset, and set up again." : `Upload failed (${x.status}${m ? ": " + m : ""}).`));
         };
         x.onerror = () => rej(new Error("Network error during upload. Check your connection and try again."));
-        x.send(JSON.stringify({ message: `Upload ${name}`, content: b64, branch: "main" }));
+        x.send(JSON.stringify({ message: `Upload ${name}`, content: data, branch: "main" }));
       });
       $("prog").value = 100;
       $("up-msg").className = "msg ok";
-      $("up-msg").textContent = "Uploaded. The job starts within a minute. You can close this page now.";
+      $("up-msg").textContent = "Uploaded. Progress appears below within a minute.";
       $("file").value = ""; picked = null; $("file-info").hidden = true;
-      setTimeout(refresh, 4000);
+      pendingUntil = Date.now() + 120000;
+      setTimeout(() => refresh(true), 4000);
     } catch (e) {
       $("up-msg").className = "msg bad"; $("up-msg").textContent = e.message;
       $("send").disabled = false;
@@ -264,7 +386,8 @@ code { font: 0.9em var(--mono); background: var(--bg); padding: 1px 5px; border-
     }
   };
 
-  // ---------- jobs ----------
+  // ---------- jobs + live progress ----------
+  const cleanTitle = (t) => t.replace(/^Upload /, "").replace(/^\d{8}-\d{6}_/, "");
   function ago(iso) {
     const s = Math.max(0, (Date.now() - new Date(iso)) / 1000);
     if (s < 60) return `${Math.round(s)}s ago`;
@@ -272,57 +395,112 @@ code { font: 0.9em var(--mono); background: var(--bg); padding: 1px 5px; border-
     if (s < 86400) return `${Math.round(s / 3600)} h ago`;
     return `${Math.round(s / 86400)} d ago`;
   }
-  function dur(a, b) {
-    const s = Math.max(0, (new Date(b) - new Date(a)) / 1000);
-    return s < 60 ? `${Math.round(s)}s` : `${Math.floor(s / 60)}m ${String(Math.round(s % 60)).padStart(2, "0")}s`;
+  function span(sec) {
+    sec = Math.max(0, Math.round(sec));
+    return sec < 60 ? `${sec}s` : `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, "0")}s`;
   }
-  let anyRunning = false;
+
+  let anyRunning = false, pendingUntil = 0, wasRunning = false;
+  async function loadProgress() {
+    try {
+      const r = await fetch(`${API}/contents/progress.json?ref=status`, { cache: "no-store", headers: headers({ Accept: "application/vnd.github.raw+json" }) });
+      return r.ok ? await r.json() : null;
+    } catch { return null; }
+  }
+
+  function renderNow(run, p) {
+    const card = $("now-card");
+    if (!run) { card.hidden = true; return; }
+    card.hidden = false;
+    const mine = p && String(p.run_id) === String(run.id);
+    const now = Date.now() / 1000;
+    let pct = 1, stage = "Waiting for a GitHub machine", eta = "";
+    $("now-name").textContent = mine && p.file ? cleanTitle(p.file) : cleanTitle(run.display_title);
+    if (run.status === "in_progress") { pct = 3; stage = "Setting up the machine (about a minute)"; }
+    if (mine) {
+      const many = p.file_count > 1 ? `Clip ${p.file_index} of ${p.file_count}. ` : "";
+      if (p.stage === "converting") { pct = 6; stage = many + "Converting the video"; }
+      else if (p.stage === "depth") {
+        const frac = p.total ? p.done / p.total : 0;
+        pct = 8 + frac * 86;
+        stage = many + `Depth: part ${Math.min(p.done + 1, p.total)} of ${p.total}`;
+        if (p.done > 0 && p.done < p.total) {
+          const per = (p.updated - p.depth_started) / p.done;
+          const left = per * (p.total - p.done) - (now - p.updated);
+          eta = left > 45 ? `about ${Math.ceil(left / 60)} min left` : "under a minute left";
+        } else if (p.done === 0) { eta = "estimating time…"; }
+      }
+      else if (p.stage === "saving") { pct = 96; stage = many + "Saving the videos"; eta = "almost done"; }
+      else if (p.stage === "done") { pct = 99; stage = "Publishing the result"; eta = "almost done"; }
+      else if (p.stage === "failed") { pct = 99; stage = "Something went wrong. See Recent jobs."; }
+    }
+    $("now-bar").value = pct;
+    $("now-pct").textContent = `${Math.round(pct)}%`;
+    $("now-stage").textContent = stage;
+    $("now-eta").textContent = eta || `running ${span(now - new Date(run.run_started_at || run.created_at) / 1000)}`;
+  }
+
   async function loadRuns() {
     const el = $("runs");
     try {
-      const data = await api("/actions/workflows/depth.yml/runs?per_page=6");
+      const [data, p] = await Promise.all([api("/actions/workflows/depth.yml/runs?per_page=6"), loadProgress()]);
+      if (!token) return;
       const runs = data.workflow_runs || [];
-      anyRunning = runs.some((r) => r.status !== "completed");
+      const active = runs.filter((r) => r.status !== "completed");
+      anyRunning = active.length > 0;
+      renderNow(active.find((r) => r.status === "in_progress") || active[active.length - 1], p);
       if (!runs.length) { el.innerHTML = '<p class="muted">No jobs yet.</p>'; return; }
       el.innerHTML = "";
       for (const r of runs) {
         const done = r.status === "completed";
         const [cls, label] = !done ? ["warn", r.status === "in_progress" ? "running" : "queued"]
-          : r.conclusion === "success" ? ["ok", "done"] : r.conclusion === "cancelled" ? ["muted", "replaced"] : ["bad", "failed"];
+          : r.conclusion === "success" ? ["ok", "done"] : r.conclusion === "cancelled" ? ["muted", "cancelled"] : ["bad", "failed"];
         const start = r.run_started_at || r.created_at;
         const row = document.createElement("div");
         row.className = "run";
-        row.innerHTML = `<span class="pill ${cls}"></span><span class="title"></span><span class="time"></span><a target="_blank" rel="noopener">Details and 16-bit PNGs on GitHub</a>`;
-        row.children[0].textContent = label;
-        row.children[1].textContent = r.display_title.replace(/^Upload \d{8}-\d{6}_/, "");
-        row.children[2].textContent = done ? `${dur(start, r.updated_at)} · ${ago(r.updated_at)}` : `${dur(start, new Date().toISOString())} so far`;
-        row.children[3].href = r.html_url;
+        row.innerHTML = '<span class="pill"></span><span class="title"></span><span class="time"></span>';
+        row.children[0].classList.add(cls); row.children[0].textContent = label;
+        row.children[1].textContent = cleanTitle(r.display_title);
+        row.children[2].textContent = done ? `${span((new Date(r.updated_at) - new Date(start)) / 1000)} · ${ago(r.updated_at)}` : `${span((Date.now() - new Date(start)) / 1000)} so far`;
+        if (label === "failed") {
+          const e = document.createElement("span"); e.className = "err";
+          e.textContent = p && String(p.run_id) === String(r.id) && p.error ? p.error : "The job stopped before finishing. Try uploading the clip again.";
+          row.appendChild(e);
+        }
         el.appendChild(row);
       }
     } catch (e) {
+      if (!token) return;
       el.innerHTML = "";
-      const p = document.createElement("p"); p.className = "msg bad";
-      p.textContent = e.status === 403 ? "GitHub rate limit hit. Add a token or wait a few minutes." : `Couldn't load jobs: ${e.message}`;
-      el.appendChild(p);
+      const m = document.createElement("p"); m.className = "msg bad";
+      m.textContent = e.status === 403 ? "GitHub rate limit hit. Wait a few minutes." : `Couldn't load jobs: ${e.message}`;
+      el.appendChild(m);
     }
   }
 
-  // ---------- results ----------
-  const blobs = new Map();
-  async function saveVideo(btn, url, name) {
+  // ---------- results library ----------
+  const blobs = new Map();      // repo path -> File
+  const previews = new Map();   // repo path -> object URL
+  async function getFile(path, name) {
+    if (blobs.has(path)) return blobs.get(path);
+    const r = await fetch(`${API}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=main`,
+      { cache: "no-store", headers: headers({ Accept: "application/vnd.github.raw+json" }) });
+    if (!r.ok) throw new Error(`Download failed (${r.status})`);
+    const f = new File([await r.blob()], name, { type: "video/mp4" });
+    blobs.set(path, f);
+    return f;
+  }
+  async function saveVideo(btn, path, name) {
+    const label = btn.dataset.label;
     try {
-      let file = blobs.get(url);
-      if (!file) {
-        btn.disabled = true; const old = btn.textContent; btn.textContent = "Fetching…";
-        const r = await fetch(url, { cache: "no-store" });
-        if (!r.ok) throw new Error(`Download failed (${r.status})`);
-        file = new File([await r.blob()], name, { type: "video/mp4" });
-        blobs.set(url, file);
-        btn.disabled = false;
-        if (navigator.canShare && navigator.canShare({ files: [file] })) { btn.textContent = "Tap again to save"; return; }
-        btn.textContent = old;
-      }
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      const cached = blobs.has(path);
+      if (!cached) { btn.disabled = true; btn.textContent = "Fetching…"; }
+      const file = await getFile(path, name);
+      btn.disabled = false;
+      const canShare = navigator.canShare && navigator.canShare({ files: [file] });
+      // iOS only opens the share sheet straight from a tap, so after a fresh download ask for a second tap.
+      if (canShare && !cached) { btn.textContent = "Ready. Tap again to save"; return; }
+      if (canShare) {
         await navigator.share({ files: [file] });
       } else {
         const a = document.createElement("a");
@@ -330,71 +508,131 @@ code { font: 0.9em var(--mono); background: var(--bg); padding: 1px 5px; border-
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(() => URL.revokeObjectURL(a.href), 30000);
       }
-      btn.textContent = btn.dataset.label;
+      btn.textContent = label;
     } catch (e) {
       btn.disabled = false;
-      if (e.name !== "AbortError") { btn.textContent = "Failed, tap to retry"; console.error(e); }
-      else btn.textContent = btn.dataset.label;
+      btn.textContent = e.name === "AbortError" ? label : "Failed, tap to retry";
     }
+  }
+  function whenOf(name) {
+    const m = name.match(/^(\d{4})(\d\d)(\d\d)-(\d\d)(\d\d)(\d\d)_/);
+    if (!m) return "";
+    const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+    return d.toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+  }
+
+  function resultCard(n, g, zip, autoload) {
+    const box = document.createElement("div"); box.className = "result";
+    const h3 = document.createElement("h3"); h3.textContent = n.replace(/^\d{8}-\d{6}_/, ""); box.appendChild(h3);
+    const when = whenOf(n);
+    if (when) { const w = document.createElement("span"); w.className = "when"; w.textContent = when; box.appendChild(w); }
+
+    const paths = { depth: `output/${g.depth.name}`, src: g.src ? `output/${g.src.name}` : null };
+    let kind = "depth";
+    const stage = document.createElement("div"); box.appendChild(stage);
+    const tabs = document.createElement("div"); tabs.className = "tabs";
+    async function view() {
+      [...tabs.children].forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.kind === kind)));
+      const path = paths[kind];
+      if (!previews.has(path)) {
+        stage.innerHTML = '<div class="ph muted">Loading preview…</div>';
+        try { previews.set(path, URL.createObjectURL(await getFile(path, path.split("/").pop()))); }
+        catch (e) { stage.innerHTML = ""; const m = document.createElement("div"); m.className = "ph msg bad"; m.textContent = e.message; stage.appendChild(m); return; }
+      }
+      if (paths[kind] !== path) return;
+      stage.innerHTML = "";
+      const v = document.createElement("video");
+      v.controls = true; v.playsInline = true; v.muted = true; v.loop = true; v.preload = "metadata";
+      v.src = previews.get(path);
+      stage.appendChild(v);
+    }
+    for (const k of ["depth", "src"]) {
+      if (!paths[k]) continue;
+      const b = document.createElement("button");
+      b.dataset.kind = k; b.textContent = k === "depth" ? "Depth" : "Source";
+      b.onclick = () => { kind = k; view(); };
+      tabs.appendChild(b);
+    }
+    if (paths.src) box.appendChild(tabs);
+    if (autoload || previews.has(paths.depth)) view();
+    else {
+      const ph = document.createElement("button"); ph.className = "secondary"; ph.textContent = "Show preview";
+      ph.onclick = view; stage.appendChild(ph);
+      [...tabs.children].forEach((b) => b.setAttribute("aria-pressed", "false"));
+    }
+
+    const row = document.createElement("div"); row.className = "row";
+    for (const k of ["depth", "src"]) {
+      if (!paths[k]) continue;
+      const b = document.createElement("button");
+      if (k === "src") b.className = "secondary";
+      b.dataset.label = b.textContent = k === "depth" ? "Save depth video" : "Save matching source";
+      b.onclick = () => saveVideo(b, paths[k], g[k].name);
+      row.appendChild(b);
+    }
+    box.appendChild(row);
+    if (zip) {
+      const a = document.createElement("a"); a.className = "btn secondary"; a.href = zip.browser_download_url;
+      a.textContent = `Download 16-bit PNG frames (${(zip.size / 1048576).toFixed(0)} MB zip)`;
+      box.appendChild(a);
+    }
+    return box;
   }
 
   let lastSig = null;
   async function loadResults() {
     const el = $("results");
     try {
-      let files = [];
+      let files = [], rels = [];
       try { files = await api("/contents/output?ref=main"); } catch (e) { if (e.status !== 404) throw e; }
+      try { rels = await api("/releases?per_page=100"); } catch {}
+      if (!token) return;
+      const zips = {};
+      for (const r of rels) for (const a of r.assets || []) {
+        const m = a.name.match(/^(.*)_depth16\.zip$/); if (m) zips[m[1]] = a;
+      }
       const groups = {};
       for (const f of files) {
         const m = f.name.match(/^(.*)_(depth|src)\.mp4$/);
         if (m) (groups[m[1]] ||= {})[m[2]] = f;
       }
       const names = Object.keys(groups).filter((n) => groups[n].depth).sort().reverse();
-      const sig = names.map((n) => n + (groups[n].depth.sha) + (groups[n].src ? groups[n].src.sha : "")).join("|");
+      const sig = names.map((n) => n + groups[n].depth.sha + (groups[n].src ? groups[n].src.sha : "") + (zips[n] ? zips[n].id : "")).join("|");
       if (sig === lastSig) return;
       lastSig = sig;
       if (!names.length) { el.innerHTML = '<p class="muted">Nothing yet. Finished depth videos show up here.</p>'; return; }
       el.innerHTML = "";
-      for (const n of names) {
-        const g = groups[n];
-        const box = document.createElement("div");
-        box.className = "result";
-        const h3 = document.createElement("h3"); h3.textContent = n; box.appendChild(h3);
-        const v = document.createElement("video");
-        v.controls = true; v.playsInline = true; v.preload = "metadata"; v.muted = true; v.loop = true;
-        v.src = RAW + "output/" + encodeURIComponent(g.depth.name);
-        box.appendChild(v);
-        const row = document.createElement("div"); row.className = "row";
-        for (const kind of ["depth", "src"]) {
-          if (!g[kind]) continue;
-          const b = document.createElement("button");
-          if (kind === "src") b.className = "secondary";
-          b.dataset.label = b.textContent = kind === "depth" ? "Save depth video" : "Save matching source";
-          const url = RAW + "output/" + encodeURIComponent(g[kind].name);
-          b.onclick = () => saveVideo(b, url, g[kind].name);
-          row.appendChild(b);
-        }
-        box.appendChild(row);
-        el.appendChild(box);
-      }
+      names.forEach((n, i) => el.appendChild(resultCard(n, groups[n], zips[n], i === 0)));
     } catch (e) {
+      if (!token) return;
       lastSig = null; el.innerHTML = "";
-      const p = document.createElement("p"); p.className = "msg bad";
-      p.textContent = `Couldn't load results: ${e.message}`; el.appendChild(p);
+      const m = document.createElement("p"); m.className = "msg bad";
+      m.textContent = `Couldn't load your videos: ${e.message}`; el.appendChild(m);
     }
   }
 
-  let timer = null;
-  async function refresh() {
+  async function refresh(full) {
     clearTimeout(timer);
-    await Promise.all([loadRuns(), loadResults()]);
-    timer = setTimeout(refresh, anyRunning ? 20000 : 60000);
+    if (!token) return;
+    const s = ss.get(SESSION);
+    if (!s || JSON.parse(s).exp < Date.now()) { logout(); return; }
+    await loadRuns();
+    const justFinished = wasRunning && !anyRunning;
+    wasRunning = anyRunning;
+    if (full || justFinished || !anyRunning) await loadResults();
+    const busy = anyRunning || Date.now() < pendingUntil;
+    timer = setTimeout(() => refresh(false), busy ? 10000 : 60000);
   }
-  $("refresh").onclick = refresh;
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+  $("refresh").onclick = () => refresh(true);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(true); });
 
-  showMode();
-  refresh();
+  // ---------- boot ----------
+  try {
+    const s = JSON.parse(ss.get(SESSION) || "null");
+    if (s && s.exp > Date.now() && ls.get(VAULT)) token = s.token;
+  } catch {}
+  show();
+  if (token) refresh(true);
 })();
 </script>
 </body>

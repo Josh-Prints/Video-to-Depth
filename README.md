@@ -5,7 +5,13 @@ Upload a video to `input/`. GitHub Actions runs [Video Depth Anything](https://g
 ## Easiest: the upload page
 **https://josh-prints.github.io/Video-to-Depth/** (once GitHub Pages is on: Settings → Pages → Source: *Deploy from a branch*, Branch: `main`, folder `/docs`).
 
-It lets you upload a clip, watch the job status, preview the result and save the depth video to your phone. You can close it while the job runs. It needs a one-time **fine-grained token**, limited to this repo only, with **Contents: Read and write** and **Actions: Read-only**. The page walks you through making one, and the token stays in that browser only.
+Everything happens on that page: log in, upload a clip, watch a live progress bar with a time estimate, preview the depth and source videos, save them to your phone, and download the 16-bit PNG frames as a zip. You can close it while a job runs.
+
+Login: on first visit you paste a **fine-grained token** (this repo only, **Contents: Read and write**, **Actions: Read-only**) and choose a passcode. The token is stored encrypted with that passcode in the browser. After that you log in with the passcode; a login lasts 8 hours or until you close the tab.
+
+The login locks the page, not the repo. While the repo is public, the files in `input/` and `output/` are still visible on github.com.
+
+Progress is published by the workflow to `progress.json` on the `status` branch. PNG zips are attached to releases tagged `png-<name>`.
 
 ## Or upload through github.com
 1. On github.com, open this repo, tap **Add file → Upload files**, pick your clip, and tap **Commit changes**.
