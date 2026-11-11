@@ -1,0 +1,102 @@
+name: Depth video
+on:
+  push:
+    paths: ["input/**"]
+  workflow_dispatch:
+    inputs:
+      file:
+        description: "Only this file from input/ (blank = every video without output yet)"
+        required: false
+      force:
+        description: "Redo even if output already exists"
+        type: boolean
+        default: false
+      backend:
+        description: "local = runner CPU, free, no quota. space = HF Space, needs HF PRO token"
+        type: choice
+        options: [local, space]
+        default: local
+      encoder:
+        description: "Model size (local only). vitl is better but ~10x slower"
+        type: choice
+        options: [vits, vitl]
+        default: vits
+      max_fps:
+        description: "Max FPS"
+        default: "30"
+      max_res:
+        description: "Max side resolution of output"
+        default: "1280"
+permissions:
+  contents: write
+concurrency:
+  group: depth
+  cancel-in-progress: false
+env:
+  BACKEND: ${{ inputs.backend || 'local' }}
+  ENCODER: ${{ inputs.encoder || 'vits' }}
+  VDA_SHA: 4f5ae23172ba60fd7bc11ef671cca678842c7072
+jobs:
+  depth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: requirements*.txt }
+
+      - name: Install (space)
+        if: env.BACKEND == 'space'
+        run: pip install -r requirements-space.txt
+
+      - name: Install (local)
+        if: env.BACKEND == 'local'
+        run: pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
+
+      - name: Get Video Depth Anything code
+        if: env.BACKEND == 'local'
+        run: |
+          git init -q vda && cd vda
+          git fetch -q --depth 1 https://github.com/DepthAnything/Video-Depth-Anything "$VDA_SHA"
+          git checkout -q FETCH_HEAD
+
+      - name: Cache model weights
+        if: env.BACKEND == 'local'
+        uses: actions/cache@v4
+        with: { path: vda/checkpoints, key: "vda-${{ env.ENCODER }}" }
+
+      - name: Download weights from Hugging Face
+        if: env.BACKEND == 'local'
+        run: |
+          mkdir -p vda/checkpoints
+          f=vda/checkpoints/video_depth_anything_${ENCODER}.pth
+          repo=$([ "$ENCODER" = vitl ] && echo Large || echo Small)
+          [ -s "$f" ] || curl -fL --retry 3 -o "$f" "https://huggingface.co/depth-anything/Video-Depth-Anything-$repo/resolve/main/video_depth_anything_${ENCODER}.pth"
+
+      - run: python depth.py
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          ONLY_FILE: ${{ inputs.file }}
+          FORCE: ${{ inputs.force }}
+          MAX_FPS: ${{ inputs.max_fps }}
+          MAX_RES: ${{ inputs.max_res }}
+
+      - name: Commit results
+        if: always()
+        run: |
+          git config user.name "depth-bot"
+          git config user.email "depth-bot@users.noreply.github.com"
+          git add output
+          git diff --cached --quiet && { echo "Nothing to commit"; exit 0; }
+          git commit -m "Add depth video"
+          git pull --rebase
+          git push
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: depth-output
+          path: |
+            output/*.mp4
+            artifact/
+          if-no-files-found: ignore
