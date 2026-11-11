@@ -2,7 +2,12 @@
 
 Upload a video to `input/`. GitHub Actions runs [Video Depth Anything](https://github.com/DepthAnything/Video-Depth-Anything) on it, using the official weights from Hugging Face, and commits the depth video to `output/`. Nothing runs on your phone, so you can close the tab.
 
-## Use it (iPhone)
+## Easiest: the upload page
+**https://josh-prints.github.io/Video-to-Depth/** (once GitHub Pages is on: Settings → Pages → Source: *Deploy from a branch*, Branch: `main`, folder `/docs`).
+
+It lets you upload a clip, watch the job status, preview the result and save the depth video to your phone. You can close it while the job runs. It needs a one-time **fine-grained token**, limited to this repo only, with **Contents: Read and write** and **Actions: Read-only**. The page walks you through making one, and the token stays in that browser only.
+
+## Or upload through github.com
 1. On github.com, open this repo, tap **Add file → Upload files**, pick your clip, and tap **Commit changes**.
 2. Open the **Actions** tab. A "Depth video" run starts automatically.
 3. When it goes green, open `output/`:
