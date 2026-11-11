@@ -59,7 +59,7 @@ def run_local(clean, name):
     import numpy as np, torch, cv2
     sys.path.insert(0, os.path.abspath(VDA_DIR))
     from video_depth_anything.video_depth import VideoDepthAnything
-    from utils.dc_utils import read_video_frames, save_video
+    from utils.dc_utils import read_video_frames, save_video  # save_video only for RGB (its depth path needs old matplotlib)
 
     if _model is None:
         cfg = {"vits": dict(features=64, out_channels=[48, 96, 192, 384]),
@@ -78,12 +78,19 @@ def run_local(clean, name):
         depths, fps = _model.infer_video_depth(frames, fps, input_size=518, device="cpu", fp32=True)
     print(f"Inference took {time.time() - t:.0f}s")
 
+    import imageio
+    d = np.asarray(depths, dtype=np.float32)
+    lo, hi = float(d.min()), float(d.max())          # one scale for the whole clip
+    # Depth first, src last: a half-finished run never leaves a src without its depth.
+    w = imageio.get_writer(f"output/{name}_depth.mp4", fps=fps, macro_block_size=1,
+                           codec="libx264", ffmpeg_params=["-crf", "12"])
+    for f in d:
+        g = ((f - lo) / (hi - lo + 1e-12) * 255).round().astype(np.uint8)
+        w.append_data(np.stack([g, g, g], axis=-1))
+    w.close()
     save_video(frames, f"output/{name}_src.mp4", fps=fps)
-    save_video(depths, f"output/{name}_depth.mp4", fps=fps, is_depths=True, grayscale=True)
 
     if PNG16:
-        d = np.asarray(depths, dtype=np.float32)
-        lo, hi = float(d.min()), float(d.max())
         out = os.path.join(ARTIFACT_DIR, f"{name}_depth16")
         os.makedirs(out, exist_ok=True)
         for i, f in enumerate(d):
