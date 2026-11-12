@@ -25,6 +25,9 @@ BACKEND = (os.environ.get("BACKEND") or "local").lower()
 MAX_RES = int(os.environ.get("MAX_RES") or 1280)
 MAX_FPS = int(os.environ.get("MAX_FPS") or 30)
 ENCODER = os.environ.get("ENCODER") or "vits"           # vits (fast) or vitl (better, much slower on CPU)
+KAGGLE_ENCODER = os.environ.get("KAGGLE_ENCODER") or "vitl"   # model used on Kaggle's GPU
+KAGGLE_TIMEOUT = int(os.environ.get("KAGGLE_TIMEOUT") or 3600)
+VDA_SHA = os.environ.get("VDA_SHA") or "4f5ae23172ba60fd7bc11ef671cca678842c7072"
 PNG16 = (os.environ.get("PNG16") or "true").lower() == "true"
 FORCE = (os.environ.get("FORCE") or "false").lower() == "true"
 ONLY = [os.path.basename(x.strip()) for x in (os.environ.get("ONLY_FILE") or "").split(",") if x.strip()]
@@ -90,13 +93,12 @@ class Progress:
 PROGRESS = Progress()
 
 
-def publish_pngs(folder, name):
-    """Zip the 16-bit PNG sequence and attach it to a GitHub release so the page can link to it."""
+def publish_zip(zip_path, name):
+    """Attach a zip of the 16-bit PNG sequence to a GitHub release so the page can link to it."""
     import re
     if not (shutil.which("gh") and os.environ.get("GH_TOKEN")):
         return
     try:
-        zip_path = shutil.make_archive(os.path.join(ARTIFACT_DIR, f"{name}_depth16"), "zip", folder)
         tag = "png-" + re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-.")
         made = subprocess.run(["gh", "release", "create", tag, zip_path, "--title", f"{name} 16-bit depth PNGs",
                                "--notes", "16-bit PNG depth sequence. Same normalization as the depth video."],
@@ -106,6 +108,10 @@ def publish_pngs(folder, name):
         print(f"Published {os.path.basename(zip_path)} to release {tag}")
     except Exception as e:
         print(f"(PNG zip not published: {e})")
+
+
+def publish_pngs(folder, name):
+    publish_zip(shutil.make_archive(os.path.join(ARTIFACT_DIR, f"{name}_depth16"), "zip", folder), name)
 
 
 def ffmpeg_bin():
@@ -157,6 +163,7 @@ def run_local(clean, name):
     from video_depth_anything.video_depth import VideoDepthAnything
     from utils.dc_utils import read_video_frames, save_video  # save_video only for RGB (its depth path needs old matplotlib)
 
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     if _model is None:
         cfg = {"vits": dict(features=64, out_channels=[48, 96, 192, 384]),
                "vitb": dict(features=128, out_channels=[96, 192, 384, 768]),
@@ -164,7 +171,7 @@ def run_local(clean, name):
         _model = VideoDepthAnything(encoder=ENCODER, **cfg)
         ckpt = os.path.join(VDA_DIR, "checkpoints", f"video_depth_anything_{ENCODER}.pth")
         _model.load_state_dict(torch.load(ckpt, map_location="cpu"), strict=True)
-        _model = _model.to("cpu").eval()
+        _model = _model.to(DEVICE).eval()
         torch.set_num_threads(os.cpu_count() or 2)
 
     import video_depth_anything.video_depth as vd
@@ -178,10 +185,10 @@ def run_local(clean, name):
     vd.tqdm = windows
 
     frames, fps = read_video_frames(clean, -1, -1, MAX_RES)
-    print(f"{len(frames)} frames at {frames.shape[2]}x{frames.shape[1]}, {fps:.2f} fps. Running {ENCODER} on CPU...")
+    print(f"{len(frames)} frames at {frames.shape[2]}x{frames.shape[1]}, {fps:.2f} fps. Running {ENCODER} on {DEVICE}...")
     t = time.time()
     with torch.inference_mode():
-        depths, fps = _model.infer_video_depth(frames, fps, input_size=518, device="cpu", fp32=True)
+        depths, fps = _model.infer_video_depth(frames, fps, input_size=518, device=DEVICE, fp32=(DEVICE == "cpu"))
     print(f"Inference took {time.time() - t:.0f}s")
 
     PROGRESS.update(stage="saving")
@@ -211,6 +218,94 @@ def run_local(clean, name):
             cv2.imwrite(f"{out}/{name}_{i:05d}.png", ((f - lo) / (hi - lo + 1e-12) * 65535).astype(np.uint16))
         print(f"Wrote {len(d)} 16-bit PNGs to {out}")
         publish_pngs(out, name)
+
+
+# ---------------- kaggle backend ----------------
+# The runner starts a private Kaggle script with a free GPU. That script clones this (public) repo at the
+# same commit, runs this same file with the Large model, and leaves the results as its output, which the
+# runner downloads. No GitHub credentials go to Kaggle.
+KERNEL = '''import glob, os, shutil, subprocess, sys
+def sh(c):
+    print("+", c, flush=True); subprocess.run(c, shell=True, check=True)
+os.makedirs("/tmp/w", exist_ok=True); os.chdir("/tmp/w")
+sh("pip install -q easydict einops imageio imageio-ffmpeg pillow-heif")
+sh("git clone -q https://github.com/{repo} app && git -C app checkout -q {sha}")
+os.chdir("app")
+sh("git init -q vda && git -C vda fetch -q --depth 1 https://github.com/DepthAnything/Video-Depth-Anything {vda_sha} && git -C vda checkout -q FETCH_HEAD")
+sh("mkdir -p vda/checkpoints && curl -fL --retry 3 -o vda/checkpoints/video_depth_anything_{enc}.pth "
+   "https://huggingface.co/depth-anything/Video-Depth-Anything-{size}/resolve/main/video_depth_anything_{enc}.pth")
+for f in glob.glob("output/*"):
+    if not f.endswith(".gitkeep"): os.remove(f)
+env = dict(os.environ, BACKEND="local", ENCODER="{enc}", ONLY_FILE={file!r}, FORCE="true",
+           MAX_RES="{max_res}", MAX_FPS="{max_fps}", GITHUB_EVENT_NAME="", GH_TOKEN="", GITHUB_TOKEN="")
+subprocess.run([sys.executable, "depth.py"], check=True, env=env)
+out = "/kaggle/working"
+for f in glob.glob("output/*"):
+    if not f.endswith(".gitkeep"): shutil.copy(f, out)
+for d in glob.glob("artifact/*_depth16"):
+    shutil.make_archive(os.path.join(out, os.path.basename(d)), "zip", d)
+print("DONE", os.listdir(out))
+'''
+
+
+def kaggle(*args, check=True):
+    env = dict(os.environ)
+    key = env.get("KAGGLE_KEY", "")
+    if key.startswith("KGAT_"):                 # new-style Kaggle token
+        env["KAGGLE_API_TOKEN"] = key; env.pop("KAGGLE_KEY", None)
+    r = subprocess.run(["kaggle", *args], capture_output=True, text=True, env=env)
+    out = (r.stdout + r.stderr).strip()
+    if check and r.returncode != 0:
+        raise RuntimeError(f"kaggle {args[0]} {args[1]} failed: {out[-400:]}")
+    return out
+
+
+def run_kaggle(src, name):
+    import json, re
+    user = os.environ.get("KAGGLE_USERNAME")
+    if not (user and os.environ.get("KAGGLE_KEY") and shutil.which("kaggle")):
+        raise RuntimeError("Kaggle is not set up (KAGGLE_USERNAME / KAGGLE_KEY secrets)")
+    slug = f"depth-pass-{os.environ.get('GITHUB_RUN_ID') or int(time.time())}-{abs(hash(name)) % 10000}"
+    ref = f"{user}/{slug}"
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(os.path.join(tmp, "run.py"), "w") as f:
+            f.write(KERNEL.format(repo=os.environ["GITHUB_REPOSITORY"], sha=os.environ["GITHUB_SHA"], vda_sha=VDA_SHA,
+                                  enc=KAGGLE_ENCODER, size="Large" if KAGGLE_ENCODER == "vitl" else "Small",
+                                  file=os.path.basename(src), max_res=MAX_RES, max_fps=MAX_FPS))
+        with open(os.path.join(tmp, "kernel-metadata.json"), "w") as f:
+            json.dump({"id": ref, "title": slug, "code_file": "run.py", "language": "python", "kernel_type": "script",
+                       "is_private": True, "enable_gpu": True, "enable_internet": True,
+                       "dataset_sources": [], "competition_sources": [], "kernel_sources": []}, f)
+        pushed = kaggle("kernels", "push", "-p", tmp)
+        if "successfully pushed" not in pushed.lower():
+            raise RuntimeError(f"Kaggle refused the job: {pushed[-400:]}")
+        print(f"Started Kaggle job {ref}")
+        PROGRESS.update(stage="gpu", gpu_started=int(time.time()))
+        try:
+            deadline = time.time() + KAGGLE_TIMEOUT
+            while True:
+                time.sleep(20)
+                st = kaggle("kernels", "status", ref, check=False).lower()
+                if "complete" in st:
+                    break
+                if re.search(r"error|cancel|fail", st.split("status")[-1]):
+                    raise RuntimeError(f"Kaggle job failed: {st[-300:]}")
+                if time.time() > deadline:
+                    raise RuntimeError("Kaggle job timed out")
+            out = os.path.join(tmp, "out")
+            kaggle("kernels", "output", ref, "-p", out)
+            got = [f for f in os.listdir(out) if f.startswith(name + "_")]
+            if f"{name}_depth.mp4" not in got:
+                raise RuntimeError(f"Kaggle finished but returned no depth video (files: {os.listdir(out)})")
+            PROGRESS.update(stage="saving")
+            for f in got:
+                if f.endswith("_depth16.zip"):
+                    os.makedirs(ARTIFACT_DIR, exist_ok=True)
+                    publish_zip(shutil.move(os.path.join(out, f), os.path.join(ARTIFACT_DIR, f)), name)
+                else:
+                    shutil.move(os.path.join(out, f), os.path.join("output", f))
+        finally:
+            kaggle("kernels", "delete", ref, "-y", check=False)      # keep the Kaggle account tidy; fine if unsupported
 
 
 # ---------------- space backend ----------------
@@ -268,6 +363,7 @@ def main():
 
     os.makedirs("output", exist_ok=True)
     run = run_space if BACKEND == "space" else run_local
+    global ENCODER
     failed = []
     todo = []
     for src in vids:
@@ -281,6 +377,14 @@ def main():
         PROGRESS.update(stage="converting", file=os.path.basename(src), file_index=n + 1,
                         file_count=len(todo), done=0, total=0, error=None)
         try:
+            if BACKEND == "kaggle":
+                try:
+                    run_kaggle(src, name)
+                    print(f"Saved output/{name}_depth.mp4 (Kaggle GPU, {KAGGLE_ENCODER})")
+                    continue
+                except Exception as e:
+                    print(f"Kaggle didn't work ({e}). Falling back to this machine's CPU.")
+                    PROGRESS.update(stage="converting", note="GPU unavailable, using the slower machine")
             with tempfile.TemporaryDirectory() as tmp:
                 clean = os.path.join(tmp, f"{name}.mp4")
                 IS_PHOTO = os.path.splitext(src)[1].lower() in IMAGE_EXT

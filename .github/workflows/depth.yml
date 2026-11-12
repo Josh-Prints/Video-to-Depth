@@ -12,10 +12,10 @@ on:
         type: boolean
         default: false
       backend:
-        description: "local = runner CPU, free, no quota. space = HF Space, needs HF PRO token"
+        description: "auto = Kaggle GPU if set up, else CPU. local = runner CPU. space = HF Space (PRO token)"
         type: choice
-        options: [local, space]
-        default: local
+        options: [auto, kaggle, local, space]
+        default: auto
       encoder:
         description: "Model size (local only). vitl is better but ~10x slower"
         type: choice
@@ -31,7 +31,8 @@ permissions:
   contents: write
 # Runs are independent, so several uploads process at the same time.
 env:
-  BACKEND: ${{ inputs.backend || 'local' }}
+  # auto: use Kaggle's free GPU when its secrets exist, otherwise this runner's CPU
+  BACKEND: ${{ (inputs.backend != '' && inputs.backend != 'auto') && inputs.backend || (secrets.KAGGLE_KEY != '' && 'kaggle' || 'local') }}
   ENCODER: ${{ inputs.encoder || 'vits' }}
   VDA_SHA: 4f5ae23172ba60fd7bc11ef671cca678842c7072
 jobs:
@@ -57,23 +58,23 @@ jobs:
         run: pip install -r requirements-space.txt
 
       - name: Install (local)
-        if: env.BACKEND == 'local'
-        run: pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
+        if: env.BACKEND != 'space'
+        run: pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt kaggle
 
       - name: Get Video Depth Anything code
-        if: env.BACKEND == 'local'
+        if: env.BACKEND != 'space'
         run: |
           git init -q vda && cd vda
           git fetch -q --depth 1 https://github.com/DepthAnything/Video-Depth-Anything "$VDA_SHA"
           git checkout -q FETCH_HEAD
 
       - name: Cache model weights
-        if: env.BACKEND == 'local'
+        if: env.BACKEND != 'space'
         uses: actions/cache@v4
         with: { path: vda/checkpoints, key: "vda-${{ env.ENCODER }}" }
 
       - name: Download weights from Hugging Face
-        if: env.BACKEND == 'local'
+        if: env.BACKEND != 'space'
         run: |
           mkdir -p vda/checkpoints
           f=vda/checkpoints/video_depth_anything_${ENCODER}.pth
@@ -84,6 +85,8 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           GH_TOKEN: ${{ github.token }}
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
           ONLY_FILE: ${{ inputs.file || steps.pick.outputs.files }}
           FORCE: ${{ inputs.force }}
           MAX_FPS: ${{ inputs.max_fps }}
