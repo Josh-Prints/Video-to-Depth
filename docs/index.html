@@ -737,7 +737,27 @@ a { color: var(--accent); }
           eta = left > 45 ? `about ${Math.ceil(left / 60)} min left` : "under a minute left";
         } else if (p.done === 0) { eta = "estimating time…"; }
       }
-      else if (p.stage === "gpu") { pct = 50; stage = many + "Running on a cloud GPU (best quality)"; eta = `${span(now - (p.gpu_started || now))} on GPU`; }
+      else if (p.stage === "gpu") {
+        const spec = QUALITY_TEXT(p.gpu_spec || "") || "cloud GPU";
+        const elapsed = now - (p.gpu_started || now);
+        if (p.live && p.total && p.done > 0) {
+          // Real progress read from the cloud GPU's own log.
+          const frac = Math.min(1, p.done / p.total);
+          pct = 8 + frac * 86;
+          stage = many + (p.saving ? `${spec}: saving` : `${spec}: part ${Math.min(p.done + 1, p.total)} of ${p.total}`);
+          const per = (p.updated - p.depth_started) / p.done, left = per * (p.total - p.done) - (now - p.updated) + 30;
+          eta = p.saving || left < 45 ? "under a minute left" : `about ${Math.ceil(left / 60)} min left`;
+        } else if (p.live) {
+          pct = 8; stage = many + `${spec}: starting`; eta = "estimating time…";
+        } else {
+          // No log yet (the cloud machine is still starting): estimate from measured run times.
+          const exp = p.gpu_expected || 300, frac = Math.min(0.95, elapsed / exp);
+          pct = 6 + frac * 88;
+          stage = many + (elapsed < 150 ? `Starting the cloud GPU for ${spec}` : `${spec} running`);
+          const left = exp - elapsed;
+          eta = left > 45 ? `about ${Math.ceil(left / 60)} min left (estimate)` : "should finish soon (estimate)";
+        }
+      }
       else if (p.stage === "saving") { pct = 96; stage = many + "Saving the videos"; eta = "almost done"; }
       else if (p.stage === "done") { pct = 99; stage = "Publishing the result"; eta = "almost done"; }
       else if (p.stage === "failed") { pct = 99; stage = "Something went wrong. See Recent jobs."; }
