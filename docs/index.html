@@ -1015,7 +1015,12 @@ a { color: var(--accent); }
   // ---------- version ----------
   // Bump APP_VERSION with each change to the site. The build line shows which commit Pages is serving,
   // so a stale cached page is easy to spot.
-  const APP_VERSION = "1.17";
+  const APP_VERSION = "1.18";
+  // Load the clip-view code with the version in its address, so a new version can't run against a
+  // stale cached copy (GitHub Pages lets browsers cache files for 10 minutes).
+  const studioJs = document.createElement("script");
+  studioJs.src = `studio.js?v=${APP_VERSION}`;
+  document.body.appendChild(studioJs);
   $("version").textContent = `Depth Pass v${APP_VERSION}`;
   fetch(`${API}/commits/main`, { cache: "no-store", headers: token ? headers() : { Accept: "application/vnd.github+json" } })
     .then((r) => (r.ok ? r.json() : null))
@@ -1034,6 +1039,5 @@ a { color: var(--accent); }
   if (token) refresh(true);
 })();
 </script>
-<script src="studio.js"></script>
 </body>
 </html>
