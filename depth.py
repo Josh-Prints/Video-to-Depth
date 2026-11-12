@@ -249,7 +249,7 @@ for enc in {encs!r}.split(","):
     if r.returncode == 0:
         open("/kaggle/working/model.txt", "w").write(enc); ok = True; break
     why = [l for l in r.stdout.splitlines() if "Error" in l or "FAILED" in l][-2:]
-    open("/kaggle/working/attempts.txt", "a").write("%s: %s\n" % (enc, " | ".join(why)[:500]))
+    open("/kaggle/working/attempts.txt", "a").write("%s: %s" % (enc, " | ".join(why)[:500]) + chr(10))
 if not ok: raise SystemExit("every model failed")
 out = "/kaggle/working"
 for f in glob.glob("output/*"):
