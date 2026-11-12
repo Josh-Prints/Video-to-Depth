@@ -1,1 +1,1 @@
-{"run_id": "43212263608", "started": 1794484144, "stage": "converting", "file": "20261111-232846_IMG_2912.mov", "file_index": 1, "file_count": 1, "done": 0, "total": 0, "error": null, "updated": 1794484144}
+{"run_id": "43212263608", "started": 1794484144, "stage": "gpu", "file": "20261111-232846_IMG_2912.mov", "file_index": 1, "file_count": 1, "done": 0, "total": 0, "error": null, "updated": 1794484148, "gpu_started": 1794484148}
