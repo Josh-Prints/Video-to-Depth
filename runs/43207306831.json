@@ -1,1 +1,1 @@
-{"run_id": "43207306831", "started": 1794482059, "stage": "gpu", "file": "kaggletest.mp4", "file_index": 1, "file_count": 1, "done": 0, "total": 0, "error": null, "updated": 1794482148, "gpu_started": 1794482062, "kaggle_model": "vitb:448", "kaggle_attempts": ""}
+{"run_id": "43207306831", "started": 1794482059, "stage": "saving", "file": "kaggletest.mp4", "file_index": 1, "file_count": 1, "done": 0, "total": 0, "error": null, "updated": 1794482149, "gpu_started": 1794482062, "kaggle_model": "vitb:448", "kaggle_attempts": ""}
