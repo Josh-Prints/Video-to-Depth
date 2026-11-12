@@ -244,9 +244,12 @@ for enc in {encs!r}.split(","):
     env = dict(os.environ, BACKEND="local", ENCODER=enc, ONLY_FILE={file!r}, FORCE="true",
                MAX_RES="{max_res}", MAX_FPS="{max_fps}", GITHUB_EVENT_NAME="", GH_TOKEN="", GITHUB_TOKEN="",
                PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
-    if subprocess.run([sys.executable, "depth.py"], env=env).returncode == 0:
+    r = subprocess.run([sys.executable, "depth.py"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    print(r.stdout[-3000:], flush=True)
+    if r.returncode == 0:
         open("/kaggle/working/model.txt", "w").write(enc); ok = True; break
-    print("MODEL", enc, "FAILED, trying the next one", flush=True)
+    why = [l for l in r.stdout.splitlines() if "Error" in l or "FAILED" in l][-2:]
+    open("/kaggle/working/attempts.txt", "a").write("%s: %s\n" % (enc, " | ".join(why)[:500]))
 if not ok: raise SystemExit("every model failed")
 out = "/kaggle/working"
 for f in glob.glob("output/*"):
@@ -325,7 +328,10 @@ def run_kaggle(src, name):
             try: used = open(os.path.join(out, "model.txt")).read().strip()
             except OSError: used = "?"
             print(f"Kaggle used model: {used}")
-            PROGRESS.update(kaggle_model=used)
+            try: tried = open(os.path.join(out, "attempts.txt")).read().strip()
+            except OSError: tried = ""
+            if tried: print(f"Models that failed on Kaggle first:\n{tried}")
+            PROGRESS.update(kaggle_model=used, kaggle_attempts=tried[-1200:])
             if f"{name}_depth.mp4" not in got:
                 raise RuntimeError(f"Kaggle finished but returned no depth video (files: {os.listdir(out)})")
             PROGRESS.update(stage="saving")
@@ -424,7 +430,7 @@ def main():
                 run(clean, name)
             print(f"Saved output/{name}_depth.mp4 and output/{name}_src.mp4")
         except Exception as e:
-            print(f"FAILED {src}: {e}")
+            print(f"FAILED {src}: {type(e).__name__}: {str(e)[:600]}")
             failed.append(src)
             PROGRESS.update(stage="failed", error=str(e)[:300])
     if failed:
