@@ -66,3 +66,6 @@ In **Actions → Depth video → Run workflow** you can set:
 - `backend`: `local` (default) or `space`
 
 `space` calls the hosted HF Space `depth-anything/Video-Depth-Anything`. That Space requests 360 s of ZeroGPU per call, and free accounts only get 5 min a day, so it's refused unless the repo secret `HF_TOKEN` belongs to an **HF PRO** account. `local` needs no token.
+
+## Version
+The site shows `Depth Pass v<APP_VERSION>` at the bottom, plus the commit Pages is serving. Bump `APP_VERSION` in `docs/index.html` with each change to the site.
