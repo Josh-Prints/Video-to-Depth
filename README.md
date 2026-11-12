@@ -38,7 +38,13 @@ Accepted: `.mov .mp4 .m4v .mkv .webm .avi .3gp .mts .m2ts .ts .wmv .flv .mpg .mp
 Every input gets re-encoded first: phone rotation is baked in, HEVC is converted to H.264, audio is dropped, the long side is capped at 1280 and the frame rate at 30. Clips that already have output are skipped.
 
 ## Faster and better: Kaggle's free GPU
-Add two repository secrets (Settings → Secrets and variables → Actions): `KAGGLE_USERNAME` and `KAGGLE_KEY` (a Kaggle API token; the account must be phone-verified so GPU and internet are allowed). Uploads then run on a Kaggle GPU. The upload page's **Quality** control picks the model (Small, Base, Large) and the working resolution; the choice travels in the upload's commit message as `[model=vitl size=392]`. Measured on Kaggle's 14.5 GB GPU: Large fits at 392, Base at 448; Large at 518 and Base at 518 do not. A setting that doesn't fit steps down automatically. If Kaggle refuses or fails, the job falls back to the runner's CPU with the Small model, so you still get a result. Without the secrets nothing changes.
+Add two repository secrets (Settings → Secrets and variables → Actions): `KAGGLE_USERNAME` and `KAGGLE_KEY` (a Kaggle API token; the account must be phone-verified so GPU and internet are allowed). Uploads then run on Kaggle's two GPUs. The upload page's **Quality** control picks the model (Small, Base, Large) and the working resolution, shows a time estimate from the clip's length, and sends the choice in the upload's commit message as `[model=vitl size=518]`. Default: Large at 518. The encoder runs a few frames at a time and the depth head runs on the second GPU, which is what lets Large at 518 fit. A setting that fails steps down to smaller ones.
+
+**Photos** use Depth Anything V2 instead (an image model): the largest model and working size that fit, with the depth PNG saved at the photo's own resolution (long side capped at 4096).
+
+Measured on Kaggle for a 9.5 s clip: Small 61 s, Base 110 s, Large 243 s of GPU time, plus about 4 minutes of fixed overhead. A photo takes about 3 minutes.
+
+If Kaggle refuses or fails, the job falls back to the runner's CPU with the Small model, so you still get a result. Without the secrets nothing changes.
 
 ## Limits
 - **GitHub web upload max is 25 MB per file.** A 9 s clip at 1080p30 fits. 4K or 60 fps probably won't, so film at 1080p30.
