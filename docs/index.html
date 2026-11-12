@@ -122,7 +122,8 @@ details.fold > summary { font-size: 0.8rem; text-transform: uppercase; letter-sp
 .st-seg button[aria-pressed=true] { color: var(--accent); border-color: var(--accent); background: var(--panel); }
 .st-stage { position: relative; width: 100%; margin: 0 auto; border-radius: 10px; overflow: hidden; background: #000; border: 1px solid var(--line); }
 .st-stage canvas { display: block; width: 100%; height: 100%; touch-action: none; }
-#st-2d { touch-action: manipulation; cursor: crosshair; }
+#st-2d { touch-action: none; cursor: crosshair; }
+.st-export { display: grid; gap: 12px; }
 .st-markers { position: absolute; inset: 0; pointer-events: none; }
 .st-dot { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; border: 2px solid #000;
   color: #000; font: 600 11px/18px var(--mono); text-align: center; box-shadow: 0 0 0 1px #fff; }
@@ -368,10 +369,25 @@ a { color: var(--accent); }
           <button class="secondary" id="st-pclear" hidden>Remove all points</button>
         </div>
 
-        <div id="pane-files" class="pane" hidden><div id="st-files" class="st-files"></div></div>
+        <div id="pane-files" class="pane" hidden>
+          <div id="st-files" class="st-files"></div>
+          <section class="st-export">
+            <h2>Export the slice</h2>
+            <p class="muted">The source video with everything the cut hides made see-through. Uses the cut you set in 3D → Cut plane.</p>
+            <div id="st-xbtns" class="st-files">
+              <button data-kind="png">Transparent PNG frames (zip)</button>
+              <button class="secondary" data-kind="webm">Transparent video (WebM)</button>
+              <button class="secondary" data-kind="mask">Mask video (white = kept)</button>
+            </div>
+            <label class="st-toggle"><input type="checkbox" id="st-xhalf"><span>Half size (much smaller files)</span></label>
+            <p id="st-xmsg" class="msg"></p>
+            <p class="muted">PNG frames work in every editor. The WebM keeps transparency in Chrome-made files for browsers and some editors. The mask video works anywhere as a track matte, including CapCut and After Effects.</p>
+          </section>
+        </div>
       </div>
     </div>
   </div>
+  <canvas id="st-slice" class="st-hidden"></canvas>
   <video id="st-vd" class="st-hidden" playsinline muted></video>
   <video id="st-vs" class="st-hidden" playsinline muted></video>
 </div>
