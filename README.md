@@ -69,3 +69,7 @@ In **Actions → Depth video → Run workflow** you can set:
 
 ## Version
 The site shows `Depth Pass v<APP_VERSION>` at the bottom, plus the commit Pages is serving. Bump `APP_VERSION` in `docs/index.html` with each change to the site.
+
+## Cuts and merging
+- **Cuts:** up to 4 at once (3D → Cuts, or the Points cut preview). Each is one distance or a plane through any 3 points, set to hide behind, hide in front, or outline, with a nudge. A pixel is hidden if any cut hides it. In 3D, cuts test the surface's own depth, so they're straight lines across it.
+- **Merging two clips:** upload the background (for example the empty wall) and the foreground (the hand) as separate clips. In the foreground clip, Watch → Merged → pick the background. The foreground shows only where it's nearer than the background. Auto-match fits the foreground's depth scale to the background's; scale, offset and a push forward/back slider fine-tune it. With a background chosen, points sit on the background and read its depth, and cuts use the background's depth scale. Files → Merged video saves the result.
