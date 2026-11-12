@@ -15,6 +15,7 @@
     lines: 0, lineW: 15, lineCol: "#ffffff",
     hl: false, hlPos: 50, hlWidth: 4, hlCol: "#ff3b30",
     cutMode: "off", cut: 50, cutType: "depth", planeOff: 0, pPreview: false, pHidden: "checker",
+    edgeBlur: 2, edgeSoft: 1,
     proj: "perspective", spin: false,
     speed: 1, loop: true,
   };
@@ -89,22 +90,44 @@ void main(){ float d = texture2D(D, a).r; if (inv > 0.5) d = 1.0 - d; vd = d; v 
   // Edges fade over about one screen pixel (fwidth) instead of a hard keep/throw-away per pixel; with
   // alpha-to-coverage on, the GPU turns that fade into smooth multisampled edges without sorting.
   const AA = (d) => d ? "#extension GL_OES_standard_derivatives : enable\n#define FW(x) max(fwidth(x), 1e-5)\n" : "#define FW(x) 1e-5\n";
-  const FS = (d) => `${AA(d)}precision mediump float;
+  // Depth as seen by the cut tests: blurred over a small disk (edgeBlur, in depth-map pixels) so outlines
+  // follow smooth curves instead of the depth map's steps, plus the depth range inside the disk, which
+  // marks a jump between near and far (a silhouette). keep() fades over (0.75 + soft) screen pixels.
+  const EDGE_GLSL = `
+uniform sampler2D D; uniform vec2 texel; uniform float blurR, invF, soft;
+float dAt(vec2 uv) { float d = texture2D(D, uv).r; return invF > 0.5 ? 1.0 - d : d; }
+vec2 blurDepth(vec2 uv) {
+  float c = dAt(uv);
+  if (blurR < 0.25) return vec2(c, 0.0);
+  float s = c, w = 1.0, mn = c, mx = c;
+  for (int i = 0; i < 12; i++) {
+    float outer = i < 6 ? 0.0 : 1.0;
+    float ang = float(i) * 1.0472 + outer * 0.5236;
+    vec2 o = vec2(cos(ang), sin(ang)) * blurR * (0.5 + 0.5 * outer) * texel;
+    float d = dAt(uv + o), k = 1.0 - 0.4 * outer;
+    s += d * k; w += k; mn = min(mn, d); mx = max(mx, d);
+  }
+  return vec2(s / w, mx - mn);
+}
+float keep(float x) { float w = FW(x) * (0.75 + soft); return smoothstep(-w, w, x); }`;
+  const FS = (d) => `${AA(d)}precision mediump float;${EDGE_GLSL}
+uniform float SF;
 uniform sampler2D C, L; uniform int mode, cutMode, hideOut, planeMode;
 uniform float cut, edge, bright, dmix, lo, hi, lines, lineW, hlOn, hlPos, hlW; uniform vec3 lineCol, hlCol; uniform vec4 plane;
 varying vec2 v; varying float vd; varying vec3 vp;
-float keep(float x) { float w = FW(x) * 0.75; return smoothstep(-w, w, x); }   // 1 where x > 0, soft edge
 void main(){
   float a = 1.0;
-  float pd = dot(plane.xyz, vp) + plane.w;            // > 0: in front of the 3-point plane
+  vec2 bd = blurDepth(v);
+  float cd = blurR < 0.25 ? vd : bd.x;                 // depth used by the cuts
+  float pd = dot(plane.xyz, vec3(vp.xy, (cd - 0.5) * SF)) + plane.w;   // > 0: in front of the 3-point plane
   if (planeMode == 1) a *= keep(pd);
   if (planeMode == 2) a *= keep(-pd);
-  if (cutMode == 1) a *= keep(vd - cut);
-  if (cutMode == 2) a *= keep(cut - vd);
-  ${d ? "if (edge > 0.0) a *= 1.0 - smoothstep(edge * 0.75, edge * 1.35, fwidth(vd));" : ""}
+  if (cutMode == 1) a *= keep(cd - cut);
+  if (cutMode == 2) a *= keep(cut - cd);
+  ${d ? "if (edge > 0.0) a *= 1.0 - smoothstep(edge * 0.75, edge * 1.35, fwidth(vd));   // stretched mesh: never feathered" : ""}
   vec3 c = texture2D(C, v).rgb;
   if (mode == 1) {
-    if (hideOut == 1) a *= keep(vd - lo) * keep(hi - vd);
+    if (hideOut == 1) a *= keep(cd - lo) * keep(hi - cd);
     c = mix(c, texture2D(L, vec2(vd, 0.5)).rgb, dmix);
     float u = (vd - lo) / max(hi - lo, 0.001);
     if (lines > 0.0 && u > 0.0 && u < 1.0) {
@@ -114,7 +137,7 @@ void main(){
     if (hlOn > 0.5) { float fw = FW(vd); c = mix(c, hlCol, 0.85 * (1.0 - smoothstep(hlW - fw, hlW + fw, abs(vd - hlPos)))); }
   }
   c *= bright;
-  if (cutMode == 3) { float fw = FW(vd); c = mix(c, vec3(0.2, 0.55, 1.0), 0.85 * (1.0 - smoothstep(0.012 - fw, 0.012 + fw, abs(vd - cut)))); }
+  if (cutMode == 3) { float fw = FW(cd); c = mix(c, vec3(0.2, 0.55, 1.0), 0.85 * (1.0 - smoothstep(0.012 - fw, 0.012 + fw, abs(cd - cut)))); }
   if (planeMode == 3) { float fw = FW(pd); c = mix(c, vec3(0.2, 0.55, 1.0), 0.85 * (1.0 - smoothstep(0.006 - fw, 0.006 + fw, abs(pd)))); }
   if (a < 0.02) discard;
   gl_FragColor = vec4(c, a); }`;
@@ -131,7 +154,7 @@ void main(){
     gl.bindAttribLocation(prog, 0, "a"); gl.linkProgram(prog);
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
     gl.useProgram(prog);
-    for (const n of ["D", "C", "L", "M", "S", "inv", "ps", "asp", "mode", "cutMode", "cut", "edge", "bright", "hideOut", "dmix", "lo", "hi", "lines", "lineW", "hlOn", "hlPos", "hlW", "lineCol", "hlCol", "plane", "planeMode"]) U[n] = gl.getUniformLocation(prog, n);
+    for (const n of ["D", "C", "L", "M", "S", "inv", "ps", "asp", "mode", "cutMode", "cut", "edge", "bright", "hideOut", "dmix", "lo", "hi", "lines", "lineW", "hlOn", "hlPos", "hlW", "lineCol", "hlCol", "plane", "planeMode", "texel", "blurR", "invF", "soft", "SF"]) U[n] = gl.getUniformLocation(prog, n);
     const tex = (unit) => { const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
@@ -220,6 +243,9 @@ void main(){
     gl.uniform4fv(U.plane, pl || [0, 0, 0, 0]);
     gl.uniform1f(U.cut, opt.cut / 100);
     gl.uniform1f(U.edge, opt.style === "mesh" && opt.edge > 0 ? 0.15 * Math.pow(0.03, opt.edge / 100) : 0);
+    gl.uniform2f(U.texel, 1 / (vD.videoWidth || 1280), 1 / (vD.videoHeight || 720));
+    gl.uniform1f(U.blurR, opt.edgeBlur); gl.uniform1f(U.soft, opt.edgeSoft);
+    gl.uniform1f(U.invF, opt.invert ? 1 : 0); gl.uniform1f(U.SF, opt.strength);
     gl.uniform1f(U.bright, opt.bright);
     gl.bindBuffer(gl.ARRAY_BUFFER, grid.vb); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
     if (opt.style === "points") gl.drawArrays(gl.POINTS, 0, grid.verts);
@@ -343,6 +369,8 @@ void main(){
         ...(opt.cutType === "plane" && !planePts ? [["note", "No plane yet. Add 3 points on the wall and tap Make a cut plane below."]] : []),
         ["seg", "cutMode", "Remove", [["off", "Nothing"], ["behind", "Behind"], ["front", "In front"]]],
         opt.cutType === "plane" ? ["range", "planeOff", "Nudge the plane (back to front)", -40, 40, 1] : ["range", "cut", "Position (far to near)", 0, 100, 1],
+        ["range", "edgeBlur", "Edge smoothing", 0, 8, 0.5],
+        ["range", "edgeSoft", "Edge softness", 0, 8, 0.5],
         ["seg", "pHidden", "Show removed parts as", [["checker", "Checkerboard"], ["dim", "Dimmed"], ["black", "Black"]]],
       ]),
     ]],
@@ -522,6 +550,8 @@ void main(){
       ["seg", "density", "Detail", [[160, "Low"], [240, "Medium"], [320, "High"], ...(uint32 ? [[480, "Very high"], [640, "Max"]] : [])]],
       ["range", "pointSize", "Dot size", 1, 8, 0.5],
       ["range", "edge", "Hide stretched edges", 0, 100, 5],
+      ["range", "edgeBlur", "Edge smoothing (blurs the steps in cut outlines)", 0, 8, 0.5],
+      ["range", "edgeSoft", "Edge softness (feathers cut edges)", 0, 8, 0.5],
       ["toggle", "invert", "Flip near and far"],
     ]],
     ["Colour", [
@@ -720,12 +750,11 @@ void main(){
   // ---------- export the slice (what the cut keeps) ----------
   const scv = $("st-slice");
   let sgl = null, sU = {}, sTexD = null, sTexC = null, sliceRec = false;
-  const SFS = (d) => `${AA(d)}precision mediump float;
-uniform sampler2D D, C; uniform int ctype, cmode, outMode; uniform float cut, S, inv; uniform vec2 asp; uniform vec4 plane;
+  const SFS = (d) => `${AA(d)}precision mediump float;${EDGE_GLSL}
+uniform sampler2D C; uniform int ctype, cmode, outMode; uniform float cut, S; uniform vec2 asp; uniform vec4 plane;
 varying vec2 v;
-float keep(float x) { float w = FW(x) * 0.75; return smoothstep(-w, w, x); }
 void main(){
-  float vd = texture2D(D, v).r; if (inv > 0.5) vd = 1.0 - vd;
+  float vd = blurDepth(v).x;
   vec3 vp = vec3((v.x - 0.5) * asp.x, (0.5 - v.y) * asp.y, (vd - 0.5) * S);
   float a = 1.0, pd = dot(plane.xyz, vp) + plane.w;
   if (ctype == 0) { if (cmode == 1) a = keep(vd - cut); if (cmode == 2) a = keep(cut - vd); }
@@ -742,7 +771,7 @@ void main(){
     g.attachShader(pr, sh(g.VERTEX_SHADER, QUAD_VS));
     g.attachShader(pr, sh(g.FRAGMENT_SHADER, SFS(!!g.getExtension("OES_standard_derivatives"))));
     g.bindAttribLocation(pr, 0, "a"); g.linkProgram(pr); g.useProgram(pr);
-    for (const n of ["D", "C", "ctype", "cmode", "outMode", "cut", "S", "inv", "asp", "plane"]) sU[n] = g.getUniformLocation(pr, n);
+    for (const n of ["D", "C", "ctype", "cmode", "outMode", "cut", "S", "asp", "plane", "texel", "blurR", "invF", "soft"]) sU[n] = g.getUniformLocation(pr, n);
     const tex = (unit) => { const t = g.createTexture(); g.activeTexture(g.TEXTURE0 + unit); g.bindTexture(g.TEXTURE_2D, t);
       for (const [k, val] of [[g.TEXTURE_MIN_FILTER, g.LINEAR], [g.TEXTURE_MAG_FILTER, g.LINEAR], [g.TEXTURE_WRAP_S, g.CLAMP_TO_EDGE], [g.TEXTURE_WRAP_T, g.CLAMP_TO_EDGE]]) g.texParameteri(g.TEXTURE_2D, k, val);
       return t; };
@@ -768,7 +797,9 @@ void main(){
     g.activeTexture(g.TEXTURE0); g.bindTexture(g.TEXTURE_2D, sTexD); g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, vD);
     g.activeTexture(g.TEXTURE1); g.bindTexture(g.TEXTURE_2D, sTexC); g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, hasSrc ? vS : vD);
     g.uniform1i(sU.ctype, st.ctype); g.uniform1i(sU.cmode, st.cmode); g.uniform1i(sU.outMode, outMode);
-    g.uniform1f(sU.cut, opt.cut / 100); g.uniform1f(sU.S, opt.strength); g.uniform1f(sU.inv, opt.invert ? 1 : 0);
+    g.uniform1f(sU.cut, opt.cut / 100); g.uniform1f(sU.S, opt.strength); g.uniform1f(sU.invF, opt.invert ? 1 : 0);
+    g.uniform2f(sU.texel, 1 / (vD.videoWidth || 1280), 1 / (vD.videoHeight || 720));
+    g.uniform1f(sU.blurR, opt.edgeBlur); g.uniform1f(sU.soft, opt.edgeSoft * scale);
     g.uniform2fv(sU.asp, aspVec()); g.uniform4fv(sU.plane, st.plane);
     g.clearColor(0, 0, 0, 0); g.clear(g.COLOR_BUFFER_BIT);
     g.drawArrays(g.TRIANGLE_STRIP, 0, 4);
