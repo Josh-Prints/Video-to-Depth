@@ -351,8 +351,14 @@ for spec in ([] if ok else {encs!r}.split(",")):
     env = dict(os.environ, BACKEND="local", ENCODER=enc, INPUT_SIZE=size, ONLY_FILE={file!r}, FORCE="true",
                MAX_RES="{max_res}", MAX_FPS="{max_fps}", GITHUB_EVENT_NAME="", GH_TOKEN="", GITHUB_TOKEN="",
                PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
-    r = subprocess.run([sys.executable, "depth.py"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    print(r.stdout[-3000:], flush=True)
+    print("PROGRESS model", spec, flush=True)
+    pr = subprocess.Popen([sys.executable, "-u", "depth.py"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    lines = []
+    for line in pr.stdout:
+        print(line, end="", flush=True); lines.append(line)
+    pr.wait()
+    class R: pass
+    r = R(); r.returncode = pr.returncode; r.stdout = "".join(lines[-400:])
     if r.returncode == 0:
         open("/kaggle/working/model.txt", "w").write(spec); ok = True
         if os.path.exists("timing.json"): shutil.copy("timing.json", "/kaggle/working/timing.json")
@@ -399,6 +405,44 @@ def kaggle_log(ref, tmp):
         return f"(could not fetch the log: {e})"
 
 
+# Measured on Kaggle (two GPUs) at working size 518, seconds per 32-frame chunk, and the usual time
+# before the first chunk (machine start, installs, model download). Scales with working size squared.
+SEC_PER_CHUNK = {"vits": 4.7, "vitb": 8.4, "vitl": 18.7}
+GPU_SETUP_SEC = 150
+
+
+def count_chunks(src):
+    """How many 32-frame chunks the model will run for this clip (after the 30 fps cap)."""
+    try:
+        import cv2
+        cap = cv2.VideoCapture(src)
+        n, fps = cap.get(cv2.CAP_PROP_FRAME_COUNT), cap.get(cv2.CAP_PROP_FPS) or 30
+        cap.release()
+        frames = n * min(1.0, MAX_FPS / fps) if n > 0 else 0
+        return max(1, -(-int(frames) // 22)) if frames else None
+    except Exception:
+        return None
+
+
+def read_live_log(ref):
+    """Parse the running Kaggle job's log: which model it is on and the last finished chunk."""
+    import json, re
+    raw = kaggle("kernels", "logs", ref, check=False)
+    text = raw
+    try:                                              # the log may come back as JSON records
+        text = "\n".join(str(e.get("data", "")) for e in json.loads(raw))
+    except Exception:
+        pass
+    info = {}
+    for m in re.finditer(r"PROGRESS model (\S+)", text):
+        info = {"spec": m.group(1)}                   # a new model attempt resets the counter
+    for m in re.finditer(r"window (\d+)/(\d+) done", text.split("PROGRESS model")[-1]):
+        info["done"], info["total"] = int(m.group(1)), int(m.group(2))
+    if "Inference took" in text.split("PROGRESS model")[-1]:
+        info["saving"] = True
+    return info
+
+
 def run_kaggle(src, name):
     import json, re
     user = os.environ.get("KAGGLE_USERNAME")
@@ -421,11 +465,30 @@ def run_kaggle(src, name):
         if "successfully pushed" not in pushed.lower():
             raise RuntimeError(f"Kaggle refused the job: {pushed[-400:]}")
         print(f"Started Kaggle job {ref}")
-        PROGRESS.update(stage="gpu", gpu_started=int(time.time()))
+        plan = kaggle_plan(os.environ.get("UPLOAD_MSG")).split(",")
+        enc, size = (plan[0].split(":") + ["518"])[:2]
+        chunks = None if os.path.splitext(src)[1].lower() in IMAGE_EXT else count_chunks(src)
+        expected = GPU_SETUP_SEC + (chunks * SEC_PER_CHUNK.get(enc, 10) * (int(size) / 518) ** 2 if chunks else 30)
+        started = int(time.time())
+        PROGRESS.update(stage="gpu", gpu_started=started, gpu_expected=round(expected), gpu_spec=plan[0],
+                        done=0, total=chunks or 0, live=False)
+        seen_spec, depth_started = None, None
         try:
             deadline = time.time() + KAGGLE_TIMEOUT
             while True:
                 time.sleep(20)
+                try:
+                    info = read_live_log(ref)
+                except Exception:
+                    info = {}
+                if info.get("spec") and info["spec"] != seen_spec:
+                    seen_spec, depth_started = info["spec"], None
+                if info.get("done"):
+                    depth_started = depth_started or int(time.time()) - 20
+                    PROGRESS.update(stage="gpu", live=True, gpu_spec=seen_spec or plan[0], done=info["done"],
+                                    total=info["total"], depth_started=depth_started, saving=info.get("saving", False))
+                elif seen_spec:
+                    PROGRESS.update(stage="gpu", live=True, gpu_spec=seen_spec, done=0, total=chunks or 0)
                 st = kaggle("kernels", "status", ref, check=False).lower()
                 if "complete" in st:
                     break
