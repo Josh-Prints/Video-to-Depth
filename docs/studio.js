@@ -256,6 +256,16 @@ void main(){
     n = n.map((x) => x / len * (n[2] < 0 ? -1 : 1));
     return [n[0], n[1], n[2], -(n[0] * P[0][0] + n[1] * P[0][1] + n[2] * P[0][2]) - opt.planeOff / 200];
   }
+  /** Re-measure the plane from points 1-3 on the current frame, after one of them was moved. */
+  function relockPlane() {
+    const pts = points.slice(0, 3);
+    if (pts.length < 3 || pts.some((p) => p.d == null)) return;
+    const prev = planePts;
+    planePts = pts.map((p) => ({ u: p.u, v: p.v, d: p.d }));
+    if (!planeEq()) { planePts = prev; $("st-pmsg").className = "msg bad"; $("st-pmsg").textContent = "Points 1, 2 and 3 are now in a straight line, so the plane wasn't changed."; return; }
+    savePlane(); clearExports();
+    $("st-pmsg").className = "msg ok"; $("st-pmsg").textContent = "Cut plane updated from the new point positions.";
+  }
   function makePlane() {
     const pts = points.slice(0, 3);
     if (pts.length < 3 || pts.some((p) => p.d == null)) return;
@@ -341,16 +351,37 @@ void main(){
   }
   const savePoints = () => clip && store.set("depthpass-pts:" + clip.name, points.map((p) => ({ u: p.u, v: p.v })));
 
-  let tapStart = null;
-  p2.addEventListener("pointerdown", (e) => { tapStart = [e.clientX, e.clientY]; });
-  p2.addEventListener("pointerup", (e) => {
-    if (!tapStart || Math.hypot(e.clientX - tapStart[0], e.clientY - tapStart[1]) > 8) return;
-    const r = p2.getBoundingClientRect(), u = (e.clientX - r.left) / r.width, v = (e.clientY - r.top) / r.height;
-    const hit = points.findIndex((p) => Math.hypot((p.u - u) * r.width, (p.v - v) * r.height) < 22);
-    if (hit >= 0) selected = hit;
-    else if (points.length < 8) { points.push({ u, v, d: null }); selected = points.length - 1; savePoints(); }
-    renderPointList();
+  // Tap empty space to add a point; press on a point and drag to move it.
+  let tapStart = null, dragging = -1, moved = false;
+  const at = (e) => { const r = p2.getBoundingClientRect(); return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)), r]; };
+  p2.addEventListener("pointerdown", (e) => {
+    const [u, v, r] = at(e);
+    tapStart = [e.clientX, e.clientY]; moved = false;
+    dragging = points.findIndex((p) => Math.hypot((p.u - u) * r.width, (p.v - v) * r.height) < 24);
+    if (dragging >= 0) { selected = dragging; p2.setPointerCapture(e.pointerId); renderPointList(); }
   });
+  p2.addEventListener("pointermove", (e) => {
+    if (dragging < 0) return;
+    if (!moved && Math.hypot(e.clientX - tapStart[0], e.clientY - tapStart[1]) < 4) return;
+    const [u, v] = at(e); moved = true;
+    points[dragging].u = u; points[dragging].v = v; points[dragging].d = null;
+  });
+  const endDrag = (e) => {
+    if (dragging >= 0) {
+      const i = dragging; dragging = -1;
+      if (moved) {
+        savePoints(); renderPointList();
+        if (planePts && i < 3) setTimeout(() => relockPlane(), 120);   // let the new spot's depth be read first
+      }
+      return;
+    }
+    if (!tapStart || Math.hypot(e.clientX - tapStart[0], e.clientY - tapStart[1]) > 8) return;
+    const [u, v] = at(e);
+    if (points.length < 8) { points.push({ u, v, d: null }); selected = points.length - 1; savePoints(); }
+    renderPointList();
+  };
+  p2.addEventListener("pointerup", endDrag);
+  p2.addEventListener("pointercancel", () => { dragging = -1; });
   $("st-pplane").onclick = makePlane;
   $("st-pclear").onclick = () => { points = []; selected = -1; savePoints(); renderPointList(); };
 
@@ -465,6 +496,7 @@ void main(){
   function applyOpt(key) {
     saveOpt();
     if (!recording) clearRecording();
+    if (!sliceRec) clearExports();
     if (key === "speed") vD.playbackRate = vS.playbackRate = opt.speed;
     if (key === "loop") vD.loop = vS.loop = opt.loop;
   }
@@ -528,6 +560,8 @@ void main(){
   const ccv = $("st-color");
   let cgl = null, cU = {}, cTexD = null, cTexC = null, cTexL = null;
   const lutW = { sig: "" };
+  // Full-screen quad; v = image coordinates with (0,0) at the top-left, matching how video frames are uploaded.
+  const QUAD_VS = "attribute vec2 a; varying vec2 v; void main(){ v = vec2(a.x * 0.5 + 0.5, 0.5 - a.y * 0.5); gl_Position = vec4(a, 0.0, 1.0); }";
   const CFS = (d) => `${AA(d)}precision mediump float;
 uniform sampler2D D, C, L; uniform int hideOut;
 uniform float dmix, lo, hi, lines, lineW, hlOn, hlPos, hlW, inv; uniform vec3 lineCol, hlCol;
@@ -551,7 +585,7 @@ void main(){
     const g = cgl, sh = (type, src) => { const x = g.createShader(type); g.shaderSource(x, src); g.compileShader(x);
       if (!g.getShaderParameter(x, g.COMPILE_STATUS)) throw new Error(g.getShaderInfoLog(x)); return x; };
     const pr = g.createProgram();
-    g.attachShader(pr, sh(g.VERTEX_SHADER, "attribute vec2 a; varying vec2 v; void main(){ v = vec2(a.x, 1.0 - a.y) * 0.5 + 0.5; v.y = 1.0 - v.y; gl_Position = vec4(a, 0.0, 1.0); }"));
+    g.attachShader(pr, sh(g.VERTEX_SHADER, QUAD_VS));
     g.attachShader(pr, sh(g.FRAGMENT_SHADER, CFS(!!g.getExtension("OES_standard_derivatives"))));
     g.bindAttribLocation(pr, 0, "a"); g.linkProgram(pr); g.useProgram(pr);
     for (const n of ["D", "C", "L", "hideOut", "dmix", "lo", "hi", "lines", "lineW", "hlOn", "hlPos", "hlW", "inv", "lineCol", "hlCol"]) cU[n] = g.getUniformLocation(pr, n);
@@ -621,10 +655,145 @@ void main(){
   $("st-wexport").onclick = exportColoured;
   const clearRecording = () => { if (recorded) { recorded = null; $("st-wexport").textContent = "Save coloured video"; $("st-wexpmsg").textContent = ""; } };
 
+  // ---------- export the slice (what the cut keeps) ----------
+  const scv = $("st-slice");
+  let sgl = null, sU = {}, sTexD = null, sTexC = null, sliceRec = false;
+  const SFS = (d) => `${AA(d)}precision mediump float;
+uniform sampler2D D, C; uniform int ctype, cmode, outMode; uniform float cut, S, inv; uniform vec2 asp; uniform vec4 plane;
+varying vec2 v;
+float keep(float x) { float w = FW(x) * 0.75; return smoothstep(-w, w, x); }
+void main(){
+  float vd = texture2D(D, v).r; if (inv > 0.5) vd = 1.0 - vd;
+  vec3 vp = vec3((v.x - 0.5) * asp.x, (0.5 - v.y) * asp.y, (vd - 0.5) * S);
+  float a = 1.0, pd = dot(plane.xyz, vp) + plane.w;
+  if (ctype == 0) { if (cmode == 1) a = keep(vd - cut); if (cmode == 2) a = keep(cut - vd); }
+  else { if (cmode == 1) a = keep(pd); if (cmode == 2) a = keep(-pd); }
+  vec3 c = texture2D(C, v).rgb;
+  gl_FragColor = outMode == 1 ? vec4(vec3(a), 1.0) : vec4(c, a); }`;
+  function initSliceGL() {
+    if (sgl) return true;
+    sgl = scv.getContext("webgl", { alpha: true, premultipliedAlpha: false, preserveDrawingBuffer: true, antialias: false });
+    if (!sgl) return false;
+    const g = sgl, sh = (type, src) => { const x = g.createShader(type); g.shaderSource(x, src); g.compileShader(x);
+      if (!g.getShaderParameter(x, g.COMPILE_STATUS)) throw new Error(g.getShaderInfoLog(x)); return x; };
+    const pr = g.createProgram();
+    g.attachShader(pr, sh(g.VERTEX_SHADER, QUAD_VS));
+    g.attachShader(pr, sh(g.FRAGMENT_SHADER, SFS(!!g.getExtension("OES_standard_derivatives"))));
+    g.bindAttribLocation(pr, 0, "a"); g.linkProgram(pr); g.useProgram(pr);
+    for (const n of ["D", "C", "ctype", "cmode", "outMode", "cut", "S", "inv", "asp", "plane"]) sU[n] = g.getUniformLocation(pr, n);
+    const tex = (unit) => { const t = g.createTexture(); g.activeTexture(g.TEXTURE0 + unit); g.bindTexture(g.TEXTURE_2D, t);
+      for (const [k, val] of [[g.TEXTURE_MIN_FILTER, g.LINEAR], [g.TEXTURE_MAG_FILTER, g.LINEAR], [g.TEXTURE_WRAP_S, g.CLAMP_TO_EDGE], [g.TEXTURE_WRAP_T, g.CLAMP_TO_EDGE]]) g.texParameteri(g.TEXTURE_2D, k, val);
+      return t; };
+    sTexD = tex(0); sTexC = tex(1);
+    g.uniform1i(sU.D, 0); g.uniform1i(sU.C, 1);
+    const b = g.createBuffer(); g.bindBuffer(g.ARRAY_BUFFER, b);
+    g.bufferData(g.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), g.STATIC_DRAW);
+    g.enableVertexAttribArray(0); g.vertexAttribPointer(0, 2, g.FLOAT, false, 0, 0);
+    return true;
+  }
+  /** What the current cut settings keep, or null when no cut is set up. */
+  function sliceSettings() {
+    const mode = ["off", "behind", "front", "outline"].indexOf(opt.cutMode);
+    if (mode !== 1 && mode !== 2) return null;
+    if (opt.cutType === "plane") { const pl = planeEq(); return pl ? { ctype: 1, cmode: mode, plane: pl } : null; }
+    return { ctype: 0, cmode: mode, plane: [0, 0, 0, 0] };
+  }
+  function drawSlice(outMode, scale) {
+    const g = sgl, st = sliceSettings() || { ctype: 0, cmode: 0, plane: [0, 0, 0, 0] };
+    const w = Math.max(2, Math.round((vD.videoWidth || 2) * scale / 2) * 2), h = Math.max(2, Math.round((vD.videoHeight || 2) * scale / 2) * 2);
+    if (scv.width !== w || scv.height !== h) { scv.width = w; scv.height = h; }
+    g.viewport(0, 0, w, h);
+    g.activeTexture(g.TEXTURE0); g.bindTexture(g.TEXTURE_2D, sTexD); g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, vD);
+    g.activeTexture(g.TEXTURE1); g.bindTexture(g.TEXTURE_2D, sTexC); g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, hasSrc ? vS : vD);
+    g.uniform1i(sU.ctype, st.ctype); g.uniform1i(sU.cmode, st.cmode); g.uniform1i(sU.outMode, outMode);
+    g.uniform1f(sU.cut, opt.cut / 100); g.uniform1f(sU.S, opt.strength); g.uniform1f(sU.inv, opt.invert ? 1 : 0);
+    g.uniform2fv(sU.asp, aspVec()); g.uniform4fv(sU.plane, st.plane);
+    g.clearColor(0, 0, 0, 0); g.clear(g.COLOR_BUFFER_BIT);
+    g.drawArrays(g.TRIANGLE_STRIP, 0, 4);
+  }
+  const seekBoth = (t) => Promise.all([vD, ...(hasSrc ? [vS] : [])].map((v) => new Promise((res) => {
+    const done = () => { v.removeEventListener("seeked", done); res(); };
+    v.addEventListener("seeked", done); v.currentTime = t; setTimeout(done, 3000);
+  })));
+  async function shareFile(file) {
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file] });
+      else { const a = document.createElement("a"); a.href = URL.createObjectURL(file); a.download = file.name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000); }
+    } catch {}
+  }
+  const loadZip = () => window.JSZip ? Promise.resolve() : new Promise((res, rej) => {
+    const sc = document.createElement("script"); sc.src = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
+    sc.onload = res; sc.onerror = () => rej(new Error("Couldn't load the zip tool.")); document.head.appendChild(sc);
+  });
+  const ready = {};                                         // finished exports waiting for the second tap
+  /** Run one export. kind: "png" (transparent PNG frames, zip), "webm" (transparent video), "mask" (MP4 matte). */
+  async function exportSlice(kind, btn) {
+    const msg = $("st-xmsg"), label = btn.dataset.label;
+    if (ready[kind]) { await shareFile(ready[kind]); return; }
+    if (!sliceSettings()) { msg.className = "msg bad"; msg.textContent = "Set up a cut first: in 3D, open Cut plane and choose Hide behind or Hide in front."; return; }
+    if (sliceRec) return;
+    if (!initSliceGL()) { msg.className = "msg bad"; msg.textContent = "This browser couldn't start the export."; return; }
+    const base = `${(clip && clip.title) || "clip"}_slice`, scale = $("st-xhalf").checked ? 0.5 : 1;
+    document.querySelectorAll("#st-xbtns button").forEach((b) => { b.disabled = true; });
+    msg.className = "msg";
+    try {
+      if (kind === "png") {
+        await loadZip();
+        const zip = new JSZip(), fps = 30, n = clip.png ? 1 : Math.max(1, Math.round((master.duration || 0) * fps));
+        await setPlaying(false);
+        for (let i = 0; i < n; i++) {
+          if (!clip.png) await seekBoth(Math.min((i + 0.5) / fps, (master.duration || 0) - 0.001));
+          drawSlice(0, scale);
+          const blob = await new Promise((r) => scv.toBlob(r, "image/png"));
+          zip.file(`${base}_${String(i).padStart(5, "0")}.png`, blob);
+          msg.textContent = `Making frame ${i + 1} of ${n}…`;
+        }
+        if (n === 1) ready[kind] = new File([await new Promise((r) => scv.toBlob(r, "image/png"))], `${base}.png`, { type: "image/png" });
+        else { msg.textContent = "Packing the zip…"; ready[kind] = new File([await zip.generateAsync({ type: "blob", compression: "STORE" })], `${base}_png.zip`, { type: "application/zip" }); }
+      } else {
+        const types = kind === "webm" ? ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"] : ["video/mp4;codecs=avc1", "video/mp4", "video/webm;codecs=vp9", "video/webm"];
+        const type = typeof MediaRecorder !== "undefined" && scv.captureStream ? types.find((t) => MediaRecorder.isTypeSupported(t)) : null;
+        if (!type) throw new Error(kind === "webm" ? "This browser can't record transparent video. Use Transparent PNG frames instead." : "This browser can't record video from the page.");
+        if (clip.png) {                                       // a photo: one still frame, no recording needed
+          drawSlice(kind === "mask" ? 1 : 0, scale);
+          ready[kind] = new File([await new Promise((r) => scv.toBlob(r, "image/png"))], `${base}${kind === "mask" ? "_mask" : ""}.png`, { type: "image/png" });
+        } else {
+          drawSlice(kind === "mask" ? 1 : 0, scale);
+          const chunks = [], rec = new MediaRecorder(scv.captureStream(30), { mimeType: type, videoBitsPerSecond: 12e6 });
+          rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+          const wasLoop = opt.loop, wasSpeed = opt.speed;
+          vD.loop = vS.loop = false; vD.playbackRate = vS.playbackRate = 1;
+          await setPlaying(false); await seekBoth(0);
+          sliceRec = { out: kind === "mask" ? 1 : 0, scale };
+          msg.textContent = "Recording… the clip plays through once.";
+          rec.start(250); await setPlaying(true);
+          await new Promise((res) => { master.onended = res; });
+          master.onended = null; sliceRec = false;
+          rec.stop(); await new Promise((r) => { rec.onstop = r; });
+          vD.loop = vS.loop = wasLoop; vD.playbackRate = vS.playbackRate = wasSpeed;
+          const ext = type.includes("mp4") ? "mp4" : "webm";
+          ready[kind] = new File(chunks, `${base}${kind === "mask" ? "_mask" : ""}.${ext}`, { type: type.split(";")[0] });
+        }
+      }
+      btn.textContent = "Ready. Tap again to save";
+      msg.className = "msg ok"; msg.textContent = `Done (${(ready[kind].size / 1048576).toFixed(1)} MB). Changing the cut clears finished exports.`;
+    } catch (e) {
+      sliceRec = false; msg.className = "msg bad"; msg.textContent = e.message || String(e); btn.textContent = label;
+    } finally {
+      document.querySelectorAll("#st-xbtns button").forEach((b) => { b.disabled = false; });
+    }
+  }
+  function clearExports() {
+    for (const k of Object.keys(ready)) delete ready[k];
+    document.querySelectorAll("#st-xbtns button").forEach((b) => { b.textContent = b.dataset.label; });
+  }
+  document.querySelectorAll("#st-xbtns button").forEach((b) => { b.dataset.label = b.textContent; b.onclick = () => exportSlice(b.dataset.kind, b); });
+
   // ---------- loop ----------
   function frame() {
     raf = 0;
     if (!open) return;
+    if (sliceRec && sgl) drawSlice(sliceRec.out, sliceRec.scale);
     if (tab === "3d" || tab === "points" || coloured()) {
       if (hasSrc && Math.abs(vD.currentTime - vS.currentTime) > 0.07) vD.currentTime = vS.currentTime;
       sampleDepths();
@@ -703,7 +872,8 @@ void main(){
       document.querySelectorAll("#st-wseg button").forEach((b) => { b.onclick = () => { watchKind = b.dataset.kind; showWatch(); }; });
       showWatch();
       // Files tab
-      const files = $("st-files"); files.innerHTML = "";
+      const files = $("st-files"); files.innerHTML = ""; clearExports(); $("st-xmsg").textContent = "";
+      $("st-xhalf").checked = !wide();
       const saves = c.png
         ? [[c.png, "Save depth image (16-bit PNG)", ""], [c.pngSrc, "Save matching source image", "secondary"]]
         : [[c.depth, "Save depth video", ""], [c.src, "Save matching source", "secondary"]];

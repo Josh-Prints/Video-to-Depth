@@ -13,7 +13,9 @@ Tap a clip to open it. It has four tabs:
 - **Points**: tap the source video to drop up to 8 points and read how near each spot is on the current frame. "Cut here" puts the 3D cut plane at that point's depth.
 - **Files**: save the videos and download the 16-bit PNG frames.
 
-**3-point cut plane:** in Points, tap 3 spots on the wall and tap "Make a cut plane". The depths are locked at that frame, and the 3D tab's Cut plane can hide what's behind or in front of the plane, outline it, or nudge it.
+**3-point cut plane:** in Points, tap 3 spots on the wall and tap "Make a cut plane". Drag a point to move it; moving one of points 1–3 re-measures the plane on the current frame. The depths are locked at that frame, and the 3D tab's Cut plane can hide what's behind or in front of the plane, outline it, or nudge it.
+
+**Export the slice** (Files tab): the source video with everything the cut hides made see-through, as transparent PNG frames (zip), a transparent WebM (where the browser can record transparency, e.g. Chrome), or a black-and-white mask video (white = kept) for use as a track matte. Optional half size.
 
 **Coloured depth:** Watch → Coloured runs the depth video through the distance colour settings (palettes, custom colours, steps, curve, range, contour lines, highlight) and can save the result as a video.
 
