@@ -1,1 +1,1 @@
-{"run_id": "43219061730", "started": 1794486901, "stage": "converting", "file": "livetest.mp4", "file_index": 1, "file_count": 1, "done": 0, "total": 0, "error": null, "updated": 1794486901}
+{"run_id": "43219061730", "started": 1794486901, "stage": "gpu", "file": "livetest.mp4", "file_index": 1, "file_count": 1, "done": 0, "total": 5, "error": null, "updated": 1794486905, "gpu_started": 1794486905, "gpu_expected": 244, "gpu_spec": "vitl:518", "live": false}
