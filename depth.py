@@ -34,6 +34,7 @@ PHOTO_MAX = int(os.environ.get("PHOTO_MAX") or 4096)    # longest side kept for 
 PHOTO_MODELS = (os.environ.get("PHOTO_MODELS") or "Large,Base,Small").split(",")
 # GPU memory in GB at working size 518 (Large and Base measured on Kaggle, Small a rough guess).
 MEM518 = {"vits": 6.0, "vitb": 14.7, "vitl": 20.0}
+ENC_BATCH = int(os.environ.get("ENC_BATCH") or 4)       # frames per encoder pass on GPU
 
 
 def kaggle_plan(msg):
@@ -255,23 +256,24 @@ def run_local(clean, name):
         _model = _model.to(DEVICE).eval()
         torch.set_num_threads(os.cpu_count() or 2)
 
-    # Two GPUs: when one is close to or past its limit, put the image encoder on the first and the
-    # depth head on the second, so neither has to hold the whole model's working memory.
+    # On a GPU, replace the model's forward pass with one that needs far less memory, with the same result:
+    #  - The image encoder handles each frame independently, but upstream feeds it all 32 frames of a chunk
+    #    at once, which builds one ~11 GB attention table for Large at 518. Feed it a few frames at a time.
+    #  - With two GPUs, the encoder runs on the first and the depth head on the second.
     ngpu = torch.cuda.device_count() if DEVICE == "cuda" else 0
-    split = False
-    if ngpu >= 2:
-        cap = torch.cuda.get_device_properties(0).total_memory / 2 ** 30
-        need = MEM518[ENCODER] * (INPUT_SIZE / 518) ** 2
-        split = need > 0.8 * cap
-        print(f"{ngpu} GPUs of {cap:.1f} GB, estimated need {need:.1f} GB: {'splitting across two' if split else 'using one'}")
-    if split:
+    split = ngpu >= 2
+    if ngpu:
         import torch.nn.functional as F
-        m = _model
-        m.pretrained.to("cuda:0"); m.head.to("cuda:1")
+        m, head_dev = _model, ("cuda:1" if split else "cuda:0")
+        m.pretrained.to("cuda:0"); m.head.to(head_dev)
+        print(f"{ngpu} GPU(s): encoder in batches of {ENC_BATCH} frames" + (", depth head on the second GPU" if split else ""))
         def forward(x):
             B, T, C, H, W = x.shape
-            feats = m.pretrained.get_intermediate_layers(x.flatten(0, 1), m.intermediate_layer_idx[m.encoder], return_class_token=True)
-            feats = [tuple(t.to("cuda:1") for t in f) for f in feats]
+            flat, idx = x.flatten(0, 1), m.intermediate_layer_idx[m.encoder]
+            outs = [m.pretrained.get_intermediate_layers(flat[i:i + ENC_BATCH], idx, return_class_token=True)
+                    for i in range(0, flat.shape[0], ENC_BATCH)]
+            feats = [tuple(torch.cat([o[l][k] for o in outs]).to(head_dev) for k in range(2)) for l in range(len(outs[0]))]
+            del outs
             depth = m.head(feats, H // 14, W // 14, T)[0]
             depth = F.relu(F.interpolate(depth, size=(H, W), mode="bilinear", align_corners=True))
             return depth.squeeze(1).unflatten(0, (B, T)).to("cuda:0")
