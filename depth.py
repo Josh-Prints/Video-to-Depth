@@ -25,7 +25,9 @@ BACKEND = (os.environ.get("BACKEND") or "local").lower()
 MAX_RES = int(os.environ.get("MAX_RES") or 1280)
 MAX_FPS = int(os.environ.get("MAX_FPS") or 30)
 ENCODER = os.environ.get("ENCODER") or "vits"           # vits (fast) or vitl (better, much slower on CPU)
-KAGGLE_ENCODER = os.environ.get("KAGGLE_ENCODER") or "vitl"   # model used on Kaggle's GPU
+# Models tried in order on Kaggle's GPU. Large (vitl) needs ~20 GB without xformers and Kaggle's free
+# GPUs have ~15 GB, so the default starts at Base. Each failure moves on to the next.
+KAGGLE_ENCODER = os.environ.get("KAGGLE_ENCODER") or "vitb,vits"
 KAGGLE_TIMEOUT = int(os.environ.get("KAGGLE_TIMEOUT") or 3600)
 VDA_SHA = os.environ.get("VDA_SHA") or "4f5ae23172ba60fd7bc11ef671cca678842c7072"
 PNG16 = (os.environ.get("PNG16") or "true").lower() == "true"
@@ -232,13 +234,20 @@ sh("pip install -q easydict einops imageio imageio-ffmpeg pillow-heif")
 sh("git clone -q https://github.com/{repo} app && git -C app checkout -q {sha}")
 os.chdir("app")
 sh("git init -q vda && git -C vda fetch -q --depth 1 https://github.com/DepthAnything/Video-Depth-Anything {vda_sha} && git -C vda checkout -q FETCH_HEAD")
-sh("mkdir -p vda/checkpoints && curl -fL --retry 3 -o vda/checkpoints/video_depth_anything_{enc}.pth "
-   "https://huggingface.co/depth-anything/Video-Depth-Anything-{size}/resolve/main/video_depth_anything_{enc}.pth")
 for f in glob.glob("output/*"):
     if not f.endswith(".gitkeep"): os.remove(f)
-env = dict(os.environ, BACKEND="local", ENCODER="{enc}", ONLY_FILE={file!r}, FORCE="true",
-           MAX_RES="{max_res}", MAX_FPS="{max_fps}", GITHUB_EVENT_NAME="", GH_TOKEN="", GITHUB_TOKEN="")
-subprocess.run([sys.executable, "depth.py"], check=True, env=env)
+SIZE = dict(vitl="Large", vitb="Base", vits="Small")
+ok = False
+for enc in {encs!r}.split(","):
+    sh("mkdir -p vda/checkpoints && curl -fL --retry 3 -o vda/checkpoints/video_depth_anything_%s.pth "
+       "https://huggingface.co/depth-anything/Video-Depth-Anything-%s/resolve/main/video_depth_anything_%s.pth" % (enc, SIZE[enc], enc))
+    env = dict(os.environ, BACKEND="local", ENCODER=enc, ONLY_FILE={file!r}, FORCE="true",
+               MAX_RES="{max_res}", MAX_FPS="{max_fps}", GITHUB_EVENT_NAME="", GH_TOKEN="", GITHUB_TOKEN="",
+               PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
+    if subprocess.run([sys.executable, "depth.py"], env=env).returncode == 0:
+        open("/kaggle/working/model.txt", "w").write(enc); ok = True; break
+    print("MODEL", enc, "FAILED, trying the next one", flush=True)
+if not ok: raise SystemExit("every model failed")
 out = "/kaggle/working"
 for f in glob.glob("output/*"):
     if not f.endswith(".gitkeep"): shutil.copy(f, out)
@@ -288,7 +297,7 @@ def run_kaggle(src, name):
     with tempfile.TemporaryDirectory() as tmp:
         with open(os.path.join(tmp, "run.py"), "w") as f:
             f.write(KERNEL.format(repo=os.environ["GITHUB_REPOSITORY"], sha=os.environ["GITHUB_SHA"], vda_sha=VDA_SHA,
-                                  enc=KAGGLE_ENCODER, size="Large" if KAGGLE_ENCODER == "vitl" else "Small",
+                                  encs=KAGGLE_ENCODER,
                                   file=os.path.basename(src), max_res=MAX_RES, max_fps=MAX_FPS))
         with open(os.path.join(tmp, "kernel-metadata.json"), "w") as f:
             json.dump({"id": ref, "title": slug, "code_file": "run.py", "language": "python", "kernel_type": "script",
@@ -313,6 +322,10 @@ def run_kaggle(src, name):
             out = os.path.join(tmp, "out")
             kaggle("kernels", "output", ref, "-p", out)
             got = [f for f in os.listdir(out) if f.startswith(name + "_")]
+            try: used = open(os.path.join(out, "model.txt")).read().strip()
+            except OSError: used = "?"
+            print(f"Kaggle used model: {used}")
+            PROGRESS.update(kaggle_model=used)
             if f"{name}_depth.mp4" not in got:
                 raise RuntimeError(f"Kaggle finished but returned no depth video (files: {os.listdir(out)})")
             PROGRESS.update(stage="saving")
@@ -398,7 +411,7 @@ def main():
             if BACKEND == "kaggle":
                 try:
                     run_kaggle(src, name)
-                    print(f"Saved output/{name}_depth.mp4 (Kaggle GPU, {KAGGLE_ENCODER})")
+                    print(f"Saved output/{name}_depth.mp4 (Kaggle GPU)")
                     continue
                 except Exception as e:
                     print(f"Kaggle didn't work ({e}). Falling back to this machine's CPU.")
