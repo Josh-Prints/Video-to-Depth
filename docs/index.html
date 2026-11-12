@@ -678,7 +678,9 @@ a { color: var(--accent); }
       // Only this user's jobs: the uploader is the "actor" of the run their upload started.
       const data = await api(`/actions/workflows/depth.yml/runs?per_page=8&actor=${encodeURIComponent(me)}`);
       const runs = (data.workflow_runs || []).filter((r) => r.actor && r.actor.login.toLowerCase() === me.toLowerCase());
-      const active = runs.filter((r) => r.status !== "completed").reverse();
+      // A run GitHub never started (e.g. queued during an outage) can sit as "queued" forever: ignore it after 90 minutes.
+      const stuck = (r) => r.status !== "completed" && r.status !== "in_progress" && Date.now() - new Date(r.created_at) > 90 * 60000;
+      const active = runs.filter((r) => r.status !== "completed" && !stuck(r)).reverse();
       const failed = runs.filter((r) => r.status === "completed" && r.conclusion === "failure").slice(0, 2);
       const prog = {};
       await Promise.all([...active, ...failed].map(async (r) => { prog[r.id] = await loadProgress(r.id); }));
@@ -689,8 +691,8 @@ a { color: var(--accent); }
       if (!runs.length) { el.innerHTML = '<p class="muted">No jobs yet.</p>'; return; }
       el.innerHTML = "";
       for (const r of runs) {
-        const done = r.status === "completed";
-        const [cls, label] = !done ? ["warn", r.status === "in_progress" ? "running" : "queued"]
+        const done = r.status === "completed" || stuck(r);
+        const [cls, label] = stuck(r) ? ["muted", "never started"] : !done ? ["warn", r.status === "in_progress" ? "running" : "queued"]
           : r.conclusion === "success" ? ["ok", "done"] : r.conclusion === "cancelled" ? ["muted", "cancelled"] : ["bad", "failed"];
         const start = r.run_started_at || r.created_at;
         const row = document.createElement("div");
