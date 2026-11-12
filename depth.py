@@ -260,6 +260,24 @@ def kaggle(*args, check=True):
     return out
 
 
+def kaggle_log(ref, tmp):
+    """Last lines of a Kaggle job's own log, so a failure there is explained here."""
+    import glob, json
+    try:
+        d = os.path.join(tmp, "faillog")
+        kaggle("kernels", "output", ref, "-p", d, check=False)
+        lines = []
+        for f in glob.glob(os.path.join(d, "*.log")):
+            raw = open(f, errors="replace").read()
+            try:
+                lines += [str(e.get("data", "")).rstrip() for e in json.loads(raw)]
+            except Exception:
+                lines += raw.splitlines()
+        return "\n".join(l for l in lines if l.strip())[-1500:] or "(no log returned)"
+    except Exception as e:
+        return f"(could not fetch the log: {e})"
+
+
 def run_kaggle(src, name):
     import json, re
     user = os.environ.get("KAGGLE_USERNAME")
@@ -289,7 +307,7 @@ def run_kaggle(src, name):
                 if "complete" in st:
                     break
                 if re.search(r"error|cancel|fail", st.split("status")[-1]):
-                    raise RuntimeError(f"Kaggle job failed: {st[-300:]}")
+                    raise RuntimeError(f"Kaggle job failed. Its log ended with:\n{kaggle_log(ref, tmp)}")
                 if time.time() > deadline:
                     raise RuntimeError("Kaggle job timed out")
             out = os.path.join(tmp, "out")
@@ -384,7 +402,8 @@ def main():
                     continue
                 except Exception as e:
                     print(f"Kaggle didn't work ({e}). Falling back to this machine's CPU.")
-                    PROGRESS.update(stage="converting", note="GPU unavailable, using the slower machine")
+                    PROGRESS.update(stage="converting", note="GPU unavailable, using the slower machine",
+                                    kaggle_error=str(e)[-1500:])
             with tempfile.TemporaryDirectory() as tmp:
                 clean = os.path.join(tmp, f"{name}.mp4")
                 IS_PHOTO = os.path.splitext(src)[1].lower() in IMAGE_EXT
