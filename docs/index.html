@@ -153,7 +153,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 28px; marg
 .st-prow:first-child { border-top: 0; }
 .st-pmid { display: grid; gap: 6px; }
 .st-pval { font: 500 15px var(--mono); font-variant-numeric: tabular-nums; }
-.st-pbtns { grid-column: 2; display: flex; gap: 8px; }
+.st-pbtns { grid-column: 2; display: flex; gap: 8px; flex-wrap: wrap; }
+.st-padj { grid-column: 1 / 3; display: grid; gap: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
 .st-files { display: grid; gap: 12px; }
 #st-watch { max-height: var(--stage-h, 42vh); }
 details summary { cursor: pointer; color: var(--accent); font-weight: 500; }
@@ -361,7 +362,8 @@ a { color: var(--accent); }
         </div>
 
         <div id="pane-points-list" class="pane">
-          <p class="muted">Tap the video to drop a point (up to 8). Each one shows how near that spot is on the current frame.</p>
+          <p class="muted">Tap the video to drop a point (up to 8), drag to move it, or tap Adjust for exact left-right, up-down and depth.</p>
+          <div id="st-pcut"></div>
           <p class="muted" id="st-pempty">No points yet.</p>
           <div id="st-plist"></div>
           <button id="st-pplane" hidden>Make a cut plane from points 1, 2 and 3</button>

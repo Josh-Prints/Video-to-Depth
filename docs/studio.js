@@ -14,7 +14,7 @@
     dMix: 100, dLo: 0, dHi: 100, dGamma: 1, dSteps: 0, dFlip: false, dHide: false,
     lines: 0, lineW: 15, lineCol: "#ffffff",
     hl: false, hlPos: 50, hlWidth: 4, hlCol: "#ff3b30",
-    cutMode: "off", cut: 50, cutType: "depth", planeOff: 0,
+    cutMode: "off", cut: 50, cutType: "depth", planeOff: 0, pPreview: false, pHidden: "checker",
     proj: "perspective", spin: false,
     speed: 1, loop: true,
   };
@@ -256,22 +256,23 @@ void main(){
     n = n.map((x) => x / len * (n[2] < 0 ? -1 : 1));
     return [n[0], n[1], n[2], -(n[0] * P[0][0] + n[1] * P[0][1] + n[2] * P[0][2]) - opt.planeOff / 200];
   }
-  /** Re-measure the plane from points 1-3 on the current frame, after one of them was moved. */
-  function relockPlane() {
+  /** Rebuild the plane from points 1-3 (their hand-set depths) whenever one of them changes. */
+  function syncPlane() {
+    if (!planePts) return;
     const pts = points.slice(0, 3);
-    if (pts.length < 3 || pts.some((p) => p.d == null)) return;
+    if (pts.length < 3 || pts.some((p) => eff(p) == null)) return;
     const prev = planePts;
-    planePts = pts.map((p) => ({ u: p.u, v: p.v, d: p.d }));
-    if (!planeEq()) { planePts = prev; $("st-pmsg").className = "msg bad"; $("st-pmsg").textContent = "Points 1, 2 and 3 are now in a straight line, so the plane wasn't changed."; return; }
+    planePts = pts.map((p) => ({ u: p.u, v: p.v, d: eff(p) }));
+    if (!planeEq()) { planePts = prev; $("st-pmsg").className = "msg bad"; $("st-pmsg").textContent = "Points 1, 2 and 3 are in a straight line, so the plane wasn't changed."; return; }
     savePlane(); clearExports();
-    $("st-pmsg").className = "msg ok"; $("st-pmsg").textContent = "Cut plane updated from the new point positions.";
   }
   function makePlane() {
     const pts = points.slice(0, 3);
-    if (pts.length < 3 || pts.some((p) => p.d == null)) return;
-    planePts = pts.map((p) => ({ u: p.u, v: p.v, d: p.d }));
+    if (pts.length < 3 || pts.some((p) => eff(p) == null)) return;
+    pts.forEach((p) => { if (p.m == null) p.m = p.d; });      // lock depths so a hand passing later can't move the plane
+    planePts = pts.map((p) => ({ u: p.u, v: p.v, d: eff(p) }));
     if (!planeEq()) { planePts = null; $("st-pmsg").className = "msg bad"; $("st-pmsg").textContent = "Points 1, 2 and 3 are in a straight line. Spread them out into a triangle."; return; }
-    savePlane();
+    savePoints(); savePlane();
     opt.cutType = "plane"; if (opt.cutMode === "off") opt.cutMode = "behind"; opt.planeOff = 4; saveOpt();
     openGroups.add("Cut plane");
     setTab("3d");
@@ -302,8 +303,9 @@ void main(){
     });
   }
   function project3D(p) {
-    if (p.d == null) return null;
-    const a = aspVec(), d = opt.invert ? 1 - p.d : p.d;
+    const e = eff(p);
+    if (e == null) return null;
+    const a = aspVec(), d = opt.invert ? 1 - e : e;
     const x = (p.u - 0.5) * a[0], y = (0.5 - p.v) * a[1], z = (d - 0.5) * opt.strength;
     const cx = M[0] * x + M[4] * y + M[8] * z + M[12], cy = M[1] * x + M[5] * y + M[9] * z + M[13], cw = M[3] * x + M[7] * y + M[11] * z + M[15];
     if (cw <= 0) return null;
@@ -312,16 +314,49 @@ void main(){
 
   // ---------- points tab ----------
   const p2 = $("st-2d"), p2ctx = p2.getContext("2d");
+  let checker = null;
   function draw2D() {
     sizeCanvas(p2);
     const v = hasSrc ? vS : vD;
-    if (v.readyState >= 2) p2ctx.drawImage(v, 0, 0, p2.width, p2.height);
+    if (v.readyState < 2) return;
+    if (opt.pPreview && sliceSettings() && !sliceRec && initSliceGL()) {
+      const W = p2.width, H = p2.height;
+      if (opt.pHidden === "checker") {
+        if (!checker) { const c = document.createElement("canvas"); c.width = c.height = 24; const x = c.getContext("2d");
+          x.fillStyle = "#666"; x.fillRect(0, 0, 24, 24); x.fillStyle = "#999"; x.fillRect(0, 0, 12, 12); x.fillRect(12, 12, 12, 12); checker = p2ctx.createPattern(c, "repeat"); }
+        p2ctx.fillStyle = checker; p2ctx.fillRect(0, 0, W, H);
+      } else {
+        p2ctx.fillStyle = "#000"; p2ctx.fillRect(0, 0, W, H);
+        if (opt.pHidden === "dim") { p2ctx.globalAlpha = 0.25; p2ctx.drawImage(v, 0, 0, W, H); p2ctx.globalAlpha = 1; }
+      }
+      drawSlice(0, Math.min(1, W / (vD.videoWidth || W)));
+      p2ctx.drawImage(scv, 0, 0, W, H);
+    } else {
+      p2ctx.drawImage(v, 0, 0, p2.width, p2.height);
+    }
+  }
+  const pointGroups = () => [
+    ["Cut preview", [
+      ["toggle", "pPreview", "Show the cut on this view"],
+      ...(!opt.pPreview ? [] : [
+        ["seg", "cutType", "Cut by", [["depth", "One distance"], ["plane", "3-point plane"]]],
+        ...(opt.cutType === "plane" && !planePts ? [["note", "No plane yet. Add 3 points on the wall and tap Make a cut plane below."]] : []),
+        ["seg", "cutMode", "Remove", [["off", "Nothing"], ["behind", "Behind"], ["front", "In front"]]],
+        opt.cutType === "plane" ? ["range", "planeOff", "Nudge the plane (back to front)", -40, 40, 1] : ["range", "cut", "Position (far to near)", 0, 100, 1],
+        ["seg", "pHidden", "Show removed parts as", [["checker", "Checkerboard"], ["dim", "Dimmed"], ["black", "Black"]]],
+      ]),
+    ]],
+  ];
+  function buildPointOptions() {
+    const root = $("st-pcut"); root.innerHTML = "";
+    openGroups.add("Cut preview");
+    renderGroups(root, pointGroups());
   }
   function renderPointList() {
     const list = $("st-plist"); list.innerHTML = "";
     $("st-pempty").hidden = points.length > 0;
     $("st-pclear").hidden = points.length === 0;
-    $("st-pplane").hidden = points.length < 3; $("st-pmsg").textContent = "";
+    $("st-pplane").hidden = points.length < 3 || !!planePts; $("st-pmsg").textContent = "";
     points.forEach((p, i) => {
       const row = el("div", "st-prow" + (i === selected ? " sel" : ""));
       const dot = el("span", "st-dot static", i + 1); dot.style.background = COLORS[i % COLORS.length];
@@ -330,26 +365,52 @@ void main(){
       const bar = el("div", "bar"); bar.appendChild(el("i")); bar.firstChild.dataset.i = i;
       mid.append(val, bar);
       const cut = el("button", "secondary small", "Cut here");
-      cut.onclick = () => { if (p.d == null) return; opt.cut = Math.round(p.d * 100); if (opt.cutMode === "off") opt.cutMode = "behind"; saveOpt(); buildOptions(); setTab("3d"); };
+      cut.onclick = () => { if (eff(p) == null) return; opt.cutType = "depth"; opt.cut = Math.round(eff(p) * 100); if (opt.cutMode === "off") opt.cutMode = "behind"; saveOpt(); buildOptions(); setTab("3d"); };
       const rm = el("button", "secondary small", "Remove");
-      rm.onclick = () => { points.splice(i, 1); selected = -1; savePoints(); renderPointList(); };
-      const btns = el("div", "st-pbtns"); btns.append(cut, rm);
+      rm.onclick = () => { points.splice(i, 1); selected = -1; savePoints(); if (planePts && i < 3) syncPlane(); renderPointList(); };
+      const adj = el("button", "secondary small", i === selected ? "Done" : "Adjust");
+      adj.onclick = () => { selected = i === selected ? -1 : i; renderPointList(); };
+      const btns = el("div", "st-pbtns"); btns.append(adj, cut, rm);
       row.append(dot, mid, btns);
-      row.onclick = (e) => { if (e.target.tagName !== "BUTTON") { selected = i; renderPointList(); } };
+      if (i === selected) row.appendChild(adjustPanel(p, i));
       list.appendChild(row);
     });
     updatePointValues();
   }
+  /** Sliders for one point: left-right, up-down, and depth (set by hand, or read from the video). */
+  function adjustPanel(p, i) {
+    const box = el("div", "st-padj");
+    const changed = () => { savePoints(); if (planePts && i < 3) syncPlane(); updatePointValues(); };
+    const slider = (label, get, set, id) => {
+      const f = el("div", "st-field"), head = el("div", "st-rhead"), v = el("span", "st-rval");
+      const lab = el("label", "st-label", label); lab.htmlFor = id;
+      const r = el("input"); r.type = "range"; r.min = 0; r.max = 100; r.step = 0.1; r.id = id;
+      const show = () => { const x = get(); r.value = x == null ? 50 : x * 100; v.textContent = x == null ? "…" : (x * 100).toFixed(1); };
+      r.oninput = () => { set(+r.value / 100); show(); changed(); };
+      head.append(lab, v); f.append(head, r); show();
+      f.refresh = show;
+      return f;
+    };
+    const sx = slider("Left ↔ right", () => p.u, (x) => { p.u = x; p.d = null; }, `padj-x-${i}`);
+    const sy = slider("Up ↕ down", () => p.v, (x) => { p.v = x; p.d = null; }, `padj-y-${i}`);
+    const sd = slider("Far ↔ near (depth)", () => eff(p), (x) => { p.m = x; }, `padj-d-${i}`);
+    const reset = el("button", "secondary small", "Use video depth here");
+    reset.onclick = () => { if (p.d == null) return; p.m = planePts && i < 3 ? p.d : null; sd.refresh(); changed(); };
+    box.append(sx, sy, sd, reset);
+    return box;
+  }
   function updatePointValues() {
     document.querySelectorAll("#st-plist .st-pval").forEach((s) => {
       const p = points[+s.dataset.i]; if (!p) return;
-      s.textContent = p.d == null ? "…" : `${Math.round(p.d * 100)}% near`;
+      const d = eff(p);
+      s.textContent = d == null ? "…" : `${(d * 100).toFixed(1)}% near${p.m != null ? " (set)" : ""}`;
     });
     document.querySelectorAll("#st-plist .bar > i").forEach((b) => {
-      const p = points[+b.dataset.i]; if (p && p.d != null) b.style.width = `${p.d * 100}%`;
+      const p = points[+b.dataset.i], d = p && eff(p); if (d != null) b.style.width = `${d * 100}%`;
     });
   }
-  const savePoints = () => clip && store.set("depthpass-pts:" + clip.name, points.map((p) => ({ u: p.u, v: p.v })));
+  const eff = (p) => (p.m != null ? p.m : p.d);
+  const savePoints = () => clip && store.set("depthpass-pts:" + clip.name, points.map((p) => ({ u: p.u, v: p.v, m: p.m ?? null })));
 
   // Tap empty space to add a point; press on a point and drag to move it.
   let tapStart = null, dragging = -1, moved = false;
@@ -364,14 +425,14 @@ void main(){
     if (dragging < 0) return;
     if (!moved && Math.hypot(e.clientX - tapStart[0], e.clientY - tapStart[1]) < 4) return;
     const [u, v] = at(e); moved = true;
-    points[dragging].u = u; points[dragging].v = v; points[dragging].d = null;
+    points[dragging].u = u; points[dragging].v = v; points[dragging].d = null; points[dragging].m = null;
   });
   const endDrag = (e) => {
     if (dragging >= 0) {
       const i = dragging; dragging = -1;
       if (moved) {
         savePoints(); renderPointList();
-        if (planePts && i < 3) setTimeout(() => relockPlane(), 120);   // let the new spot's depth be read first
+        if (planePts && i < 3) setTimeout(() => { points[i].m = points[i].d; savePoints(); syncPlane(); renderPointList(); }, 120);   // read the new spot's depth first
       }
       return;
     }
@@ -502,6 +563,7 @@ void main(){
   }
   function buildOptions() {
     if (tab === "watch") return buildWatchOptions();
+    if (tab === "points") return buildPointOptions();
     const root = $("st-options"); root.innerHTML = "";
     $("st-legend").hidden = opt.color !== "distance";
     renderGroups(root, groups());
@@ -547,7 +609,7 @@ void main(){
           lab.append(c, el("span", null, label)); field.appendChild(lab);
         } else if (kind === "toggle") {
           const lab = el("label", "st-toggle"); const c = el("input"); c.type = "checkbox"; c.checked = !!opt[key]; c.id = "opt-" + key;
-          c.onchange = () => { opt[key] = c.checked; applyOpt(key); if (key === "hl") buildOptions(); };
+          c.onchange = () => { opt[key] = c.checked; applyOpt(key); if (key === "hl" || key === "pPreview") buildOptions(); };
           lab.append(c, el("span", null, label)); field.appendChild(lab);
         }
         body.appendChild(field);
@@ -830,7 +892,7 @@ void main(){
       catch (e) { $("st-glmsg").hidden = false; $("st-glmsg").textContent = "This browser couldn't start 3D graphics."; }
       buildOptions();
     }
-    if (t === "points") renderPointList();
+    if (t === "points") { renderPointList(); buildPointOptions(); }
     if ((t === "3d" || t === "points") && master.readyState < 2) seek(0.001);
     if (!raf) raf = requestAnimationFrame(frame);
     requestAnimationFrame(fitStages);
@@ -846,7 +908,7 @@ void main(){
     $("st-main").hidden = true;
     hasSrc = !!c.src;
     master = hasSrc ? vS : vD;
-    points = store.get("depthpass-pts:" + c.name, []).map((p) => ({ u: p.u, v: p.v, d: null })); selected = -1;
+    points = store.get("depthpass-pts:" + c.name, []).map((p) => ({ u: p.u, v: p.v, m: p.m ?? null, d: null })); selected = -1;
     planePts = store.get("depthpass-plane:" + c.name, null);
     try {
       const [fd, fs] = await Promise.all([DP.getFile(c.depth.path, c.depth.name), hasSrc ? DP.getFile(c.src.path, c.src.name) : null]);
