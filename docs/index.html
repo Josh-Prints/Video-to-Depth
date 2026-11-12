@@ -134,8 +134,10 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 28px; marg
 .st-toggle { display: flex; align-items: center; gap: 10px; font-size: 0.95rem; }
 .st-toggle input { width: 22px; height: 22px; accent-color: var(--accent); }
 .st-toggle input[type=color] { width: 44px; height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; }
-#st-legend { display: grid; gap: 4px; }
-#st-lut { display: block; width: 100%; height: 14px; border-radius: 4px; border: 1px solid var(--line); }
+#st-legend, #st-wlegend { display: grid; gap: 4px; }
+#st-color { display: block; width: 100%; max-height: 62vh; object-fit: contain; border-radius: 8px; background: #000; }
+#st-woptions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+#st-lut, #st-wlut { display: block; width: 100%; height: 14px; border-radius: 4px; border: 1px solid var(--line); }
 .st-prow { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px 12px; align-items: center; padding: 14px 0; border-top: 1px solid var(--line); }
 .st-prow:first-child { border-top: 0; }
 .st-pmid { display: grid; gap: 6px; }
@@ -298,8 +300,18 @@ a { color: var(--accent); }
     </div>
 
     <div id="pane-watch" class="pane">
+      <div class="st-seg" id="st-wseg"><button data-kind="depth">Depth</button><button data-kind="color">Coloured</button><button data-kind="src">Source</button></div>
       <video id="st-watch" controls playsinline muted loop></video>
-      <div class="st-seg" id="st-wseg"><button data-kind="depth">Depth</button><button data-kind="src">Source</button></div>
+      <div id="st-wcolor" class="pane" hidden>
+        <canvas id="st-color"></canvas>
+        <div id="st-wlegend">
+          <canvas id="st-wlut" width="256" height="1"></canvas>
+          <div class="ramp-labels"><span>far</span><span>near</span></div>
+        </div>
+        <button id="st-wexport">Save coloured video</button>
+        <p id="st-wexpmsg" class="msg"></p>
+        <div id="st-woptions"></div>
+      </div>
     </div>
 
     <div id="pane-3d" class="pane" hidden>
@@ -332,6 +344,8 @@ a { color: var(--accent); }
     <div id="pane-points-list" class="pane">
       <p class="muted" id="st-pempty">No points yet.</p>
       <div id="st-plist"></div>
+      <button id="st-pplane" hidden>Make a cut plane from points 1, 2 and 3</button>
+      <p id="st-pmsg" class="msg"></p>
       <button class="secondary" id="st-pclear" hidden>Remove all points</button>
     </div>
 

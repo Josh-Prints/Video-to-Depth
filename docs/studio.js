@@ -14,7 +14,7 @@
     dMix: 100, dLo: 0, dHi: 100, dGamma: 1, dSteps: 0, dFlip: false, dHide: false,
     lines: 0, lineW: 15, lineCol: "#ffffff",
     hl: false, hlPos: 50, hlWidth: 4, hlCol: "#ff3b30",
-    cutMode: "off", cut: 50,
+    cutMode: "off", cut: 50, cutType: "depth", planeOff: 0,
     proj: "perspective", spin: false,
     speed: 1, loop: true,
   };
@@ -50,17 +50,22 @@
     }
     return out;
   }
-  let lutSig = "";
-  function syncLUT() {
-    const sig = [opt.dPalette, opt.dFarCol, opt.dMidCol, opt.dNearCol, opt.dLo, opt.dHi, opt.dGamma, opt.dSteps, opt.dFlip].join("|");
-    if (sig === lutSig) return;
-    lutSig = sig;
+  const lutKey = () => [opt.dPalette, opt.dFarCol, opt.dMidCol, opt.dNearCol, opt.dLo, opt.dHi, opt.dGamma, opt.dSteps, opt.dFlip].join("|");
+  /** Upload the colour table to a GL context (unit 2) when the colour settings changed; also redraw the legends. */
+  function uploadLUT(g, tex, holder) {
+    const sig = lutKey();
+    if (holder.sig === sig) return;
+    holder.sig = sig;
     const lut = buildLUT();
-    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, texL);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, lut);
-    const c = $("st-lut"), ctx = c.getContext("2d"), im = ctx.createImageData(256, 1);
-    im.data.set(lut); ctx.putImageData(im, 0, 0);
+    g.activeTexture(g.TEXTURE2); g.bindTexture(g.TEXTURE_2D, tex);
+    g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, 256, 1, 0, g.RGBA, g.UNSIGNED_BYTE, lut);
+    for (const id of ["st-lut", "st-wlut"]) {
+      const c = $(id), ctx = c.getContext("2d"), im = ctx.createImageData(256, 1);
+      im.data.set(lut); ctx.putImageData(im, 0, 0);
+    }
   }
+  const lut3 = { sig: "" };
+  const syncLUT = () => uploadLUT(gl, texL, lut3);
 
   // ---------- state ----------
   let clip = null, tab = "watch", raf = 0, open = false;
@@ -77,14 +82,18 @@
 
   const VS = `
 attribute vec2 a; uniform sampler2D D; uniform mat4 M; uniform float S, inv, ps; uniform vec2 asp;
-varying vec2 v; varying float vd;
+varying vec2 v; varying float vd; varying vec3 vp;
 void main(){ float d = texture2D(D, a).r; if (inv > 0.5) d = 1.0 - d; vd = d; v = a;
-  gl_Position = M * vec4((a.x - 0.5) * asp.x, (0.5 - a.y) * asp.y, (d - 0.5) * S, 1.0); gl_PointSize = ps; }`;
+  vp = vec3((a.x - 0.5) * asp.x, (0.5 - a.y) * asp.y, (d - 0.5) * S);
+  gl_Position = M * vec4(vp, 1.0); gl_PointSize = ps; }`;
   const FS = (d) => `${d ? "#extension GL_OES_standard_derivatives : enable\n" : ""}precision mediump float;
-uniform sampler2D C, L; uniform int mode, cutMode, hideOut;
-uniform float cut, edge, bright, dmix, lo, hi, lines, lineW, hlOn, hlPos, hlW; uniform vec3 lineCol, hlCol;
-varying vec2 v; varying float vd;
+uniform sampler2D C, L; uniform int mode, cutMode, hideOut, planeMode;
+uniform float cut, edge, bright, dmix, lo, hi, lines, lineW, hlOn, hlPos, hlW; uniform vec3 lineCol, hlCol; uniform vec4 plane;
+varying vec2 v; varying float vd; varying vec3 vp;
 void main(){
+  float pd = dot(plane.xyz, vp) + plane.w;            // > 0: in front of the 3-point plane
+  if (planeMode == 1 && pd < 0.0) discard;
+  if (planeMode == 2 && pd > 0.0) discard;
   if (cutMode == 1 && vd < cut) discard;
   if (cutMode == 2 && vd > cut) discard;
   ${d ? "if (edge > 0.0 && fwidth(vd) > edge) discard;" : ""}
@@ -98,6 +107,7 @@ void main(){
   }
   c *= bright;
   if (cutMode != 0 && abs(vd - cut) < 0.012) c = mix(c, vec3(0.2, 0.55, 1.0), 0.85);
+  if (planeMode != 0 && abs(pd) < 0.006) c = mix(c, vec3(0.2, 0.55, 1.0), 0.85);
   gl_FragColor = vec4(c, 1.0); }`;
 
   function initGL() {
@@ -112,12 +122,12 @@ void main(){
     gl.bindAttribLocation(prog, 0, "a"); gl.linkProgram(prog);
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
     gl.useProgram(prog);
-    for (const n of ["D", "C", "L", "M", "S", "inv", "ps", "asp", "mode", "cutMode", "cut", "edge", "bright", "hideOut", "dmix", "lo", "hi", "lines", "lineW", "hlOn", "hlPos", "hlW", "lineCol", "hlCol"]) U[n] = gl.getUniformLocation(prog, n);
+    for (const n of ["D", "C", "L", "M", "S", "inv", "ps", "asp", "mode", "cutMode", "cut", "edge", "bright", "hideOut", "dmix", "lo", "hi", "lines", "lineW", "hlOn", "hlPos", "hlW", "lineCol", "hlCol", "plane", "planeMode"]) U[n] = gl.getUniformLocation(prog, n);
     const tex = (unit) => { const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128, 128, 128, 255])); return t; };
-    texD = tex(0); texC = tex(1); texL = tex(2); lutSig = "";
+    texD = tex(0); texC = tex(1); texL = tex(2); lut3.sig = "";
     gl.uniform1i(U.D, 0); gl.uniform1i(U.C, 1); gl.uniform1i(U.L, 2);
     gl.enable(gl.DEPTH_TEST);
     return true;
@@ -192,7 +202,10 @@ void main(){
     gl.uniform1f(U.dmix, opt.dMix / 100); gl.uniform1f(U.lo, lo); gl.uniform1f(U.hi, hi);
     gl.uniform1f(U.lines, opt.lines); gl.uniform1f(U.lineW, opt.lineW / 100); gl.uniform3fv(U.lineCol, col(opt.lineCol));
     gl.uniform1f(U.hlOn, opt.hl ? 1 : 0); gl.uniform1f(U.hlPos, opt.hlPos / 100); gl.uniform1f(U.hlW, opt.hlWidth / 200); gl.uniform3fv(U.hlCol, col(opt.hlCol));
-    gl.uniform1i(U.cutMode, ["off", "behind", "front", "outline"].indexOf(opt.cutMode));
+    const modeIx = ["off", "behind", "front", "outline"].indexOf(opt.cutMode), pl = planeEq();
+    gl.uniform1i(U.cutMode, opt.cutType === "depth" ? modeIx : 0);
+    gl.uniform1i(U.planeMode, opt.cutType === "plane" && pl ? modeIx : 0);
+    gl.uniform4fv(U.plane, pl || [0, 0, 0, 0]);
     gl.uniform1f(U.cut, opt.cut / 100);
     gl.uniform1f(U.edge, opt.style === "mesh" && opt.edge > 0 ? 0.15 * Math.pow(0.03, opt.edge / 100) : 0);
     gl.uniform1f(U.bright, opt.bright);
@@ -200,6 +213,31 @@ void main(){
     if (opt.style === "points") gl.drawArrays(gl.POINTS, 0, grid.verts);
     else if (opt.style === "wire") { gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, grid.lb); gl.drawElements(gl.LINES, grid.line, gl.UNSIGNED_SHORT, 0); }
     else { gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, grid.tb); gl.drawElements(gl.TRIANGLES, grid.tri, gl.UNSIGNED_SHORT, 0); }
+  }
+
+  // ---------- 3-point cut plane ----------
+  let planePts = null;                       // [{u, v, d}] x3, depths locked when the plane was made
+  const savePlane = () => clip && store.set("depthpass-plane:" + clip.name, planePts);
+  /** Plane through the 3 locked points in the 3D view's space, as [nx, ny, nz, w]; normal faces the camera. */
+  function planeEq() {
+    if (!planePts) return null;
+    const a = aspVec(), P = planePts.map((p) => { const d = opt.invert ? 1 - p.d : p.d; return [(p.u - 0.5) * a[0], (0.5 - p.v) * a[1], (d - 0.5) * opt.strength]; });
+    const e1 = [0, 1, 2].map((k) => P[1][k] - P[0][k]), e2 = [0, 1, 2].map((k) => P[2][k] - P[0][k]);
+    let n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+    const len = Math.hypot(...n);
+    if (len < 1e-6) return null;                          // the 3 points are in a line
+    n = n.map((x) => x / len * (n[2] < 0 ? -1 : 1));
+    return [n[0], n[1], n[2], -(n[0] * P[0][0] + n[1] * P[0][1] + n[2] * P[0][2]) - opt.planeOff / 200];
+  }
+  function makePlane() {
+    const pts = points.slice(0, 3);
+    if (pts.length < 3 || pts.some((p) => p.d == null)) return;
+    planePts = pts.map((p) => ({ u: p.u, v: p.v, d: p.d }));
+    if (!planeEq()) { planePts = null; $("st-pmsg").className = "msg bad"; $("st-pmsg").textContent = "Points 1, 2 and 3 are in a straight line. Spread them out into a triangle."; return; }
+    savePlane();
+    opt.cutType = "plane"; if (opt.cutMode === "off") opt.cutMode = "behind"; opt.planeOff = 4; saveOpt();
+    openGroups.add("Cut plane");
+    setTab("3d");
   }
 
   // ---------- depth sampling for points ----------
@@ -246,6 +284,7 @@ void main(){
     const list = $("st-plist"); list.innerHTML = "";
     $("st-pempty").hidden = points.length > 0;
     $("st-pclear").hidden = points.length === 0;
+    $("st-pplane").hidden = points.length < 3; $("st-pmsg").textContent = "";
     points.forEach((p, i) => {
       const row = el("div", "st-prow" + (i === selected ? " sel" : ""));
       const dot = el("span", "st-dot static", i + 1); dot.style.background = COLORS[i % COLORS.length];
@@ -285,6 +324,7 @@ void main(){
     else if (points.length < 8) { points.push({ u, v, d: null }); selected = points.length - 1; savePoints(); }
     renderPointList();
   });
+  $("st-pplane").onclick = makePlane;
   $("st-pclear").onclick = () => { points = []; selected = -1; savePoints(); renderPointList(); };
 
   // ---------- 3D gestures ----------
@@ -330,21 +370,7 @@ void main(){
   $("st-scrub").addEventListener("change", () => { scrubbing = false; });
 
   // ---------- options UI ----------
-  const groups = () => [
-    ["Shape", [
-      ["seg", "style", "Draw as", [["mesh", "Surface"], ["points", "Dots"], ["wire", "Wireframe"]]],
-      ["range", "strength", "Depth strength", 0, 2, 0.05],
-      ["seg", "density", "Detail", [[96, "Low"], [160, "Medium"], [240, "High"], [320, "Max"]]],
-      ["range", "pointSize", "Dot size", 1, 8, 0.5],
-      ["range", "edge", "Hide stretched edges", 0, 100, 5],
-      ["toggle", "invert", "Flip near and far"],
-    ]],
-    ["Colour", [
-      ["seg", "color", "Colour from", [["video", "Video"], ["distance", "Distance colours"]]],
-      ["range", "bright", "Brightness", 0.5, 1.5, 0.05],
-      ["seg", "bg", "Background", [["dark", "Dark"], ["grey", "Grey"], ["light", "Light"]]],
-    ]],
-    ...(opt.color !== "distance" ? [] : [
+  const distanceGroups = () => [
       ["Distance colours", [
         ["seg", "dPalette", "Palette", [["grey", "Grey"], ["turbo", "Turbo"], ["heat", "Heat"], ["viridis", "Viridis"], ["magma", "Magma"], ["ocean", "Ocean"], ["custom", "My colours"]]],
         ...(opt.dPalette !== "custom" ? [] : [["color", "dFarCol", "Far colour"], ["color", "dMidCol", "Middle colour"], ["color", "dNearCol", "Near colour"]]),
@@ -368,11 +394,35 @@ void main(){
         ["toggle", "hl", "Highlight one distance"],
         ...(!opt.hl ? [] : [["range", "hlPos", "Distance (far to near)", 0, 100, 1], ["range", "hlWidth", "Band width", 1, 20, 1], ["color", "hlCol", "Highlight colour"]]),
       ]],
-    ]),
+    
+  ];
+  const groups = () => [
+    ["Shape", [
+      ["seg", "style", "Draw as", [["mesh", "Surface"], ["points", "Dots"], ["wire", "Wireframe"]]],
+      ["range", "strength", "Depth strength", 0, 2, 0.05],
+      ["seg", "density", "Detail", [[96, "Low"], [160, "Medium"], [240, "High"], [320, "Max"]]],
+      ["range", "pointSize", "Dot size", 1, 8, 0.5],
+      ["range", "edge", "Hide stretched edges", 0, 100, 5],
+      ["toggle", "invert", "Flip near and far"],
+    ]],
+    ["Colour", [
+      ["seg", "color", "Colour from", [["video", "Video"], ["distance", "Distance colours"]]],
+      ["range", "bright", "Brightness", 0.5, 1.5, 0.05],
+      ["seg", "bg", "Background", [["dark", "Dark"], ["grey", "Grey"], ["light", "Light"]]],
+    ]],
+    ...(opt.color !== "distance" ? [] : distanceGroups()),
     ["Cut plane", [
-      ["note", "Slices the scene at one depth, like a wall. Tip: map a point on the wall, then tap Cut here."],
-      ["seg", "cutMode", "Mode", [["off", "Off"], ["behind", "Hide behind"], ["front", "Hide in front"], ["outline", "Outline only"]]],
-      ["range", "cut", "Position (far to near)", 0, 100, 1],
+      ["seg", "cutType", "Cut by", [["depth", "One distance"], ["plane", "3-point plane"]]],
+      ...(opt.cutType === "plane"
+        ? (planePts
+          ? [["note", "Cuts along the plane through your 3 points. Tilted walls work too. It starts nudged slightly forward so the wall itself is removed cleanly; slide to 0 to put it exactly on the wall."],
+             ["seg", "cutMode", "Mode", [["off", "Off"], ["behind", "Hide behind"], ["front", "Hide in front"], ["outline", "Outline only"]]],
+             ["range", "planeOff", "Nudge the plane (back to front)", -40, 40, 1],
+             ["buttons", "Plane", ["Remove plane"], () => { planePts = null; savePlane(); opt.cutType = "depth"; saveOpt(); buildOptions(); }]]
+          : [["note", "No plane yet. In the Points tab, tap 3 spots on the wall, then tap Make a cut plane."]])
+        : [["note", "Slices the scene at one distance. Tip: map a point on the wall, then tap Cut here."],
+           ["seg", "cutMode", "Mode", [["off", "Off"], ["behind", "Hide behind"], ["front", "Hide in front"], ["outline", "Outline only"]]],
+           ["range", "cut", "Position (far to near)", 0, 100, 1]]),
     ]],
     ["Camera", [
       ["buttons", "View", Object.keys(VIEWS), setView],
@@ -387,13 +437,25 @@ void main(){
   const openGroups = new Set(["Shape"]);
   function applyOpt(key) {
     saveOpt();
+    if (!recording) clearRecording();
     if (key === "speed") vD.playbackRate = vS.playbackRate = opt.speed;
     if (key === "loop") vD.loop = vS.loop = opt.loop;
   }
   function buildOptions() {
+    if (tab === "watch") return buildWatchOptions();
     const root = $("st-options"); root.innerHTML = "";
     $("st-legend").hidden = opt.color !== "distance";
-    for (const [title, items] of groups()) {
+    renderGroups(root, groups());
+    const reset = el("button", "secondary", "Reset all options");
+    reset.onclick = () => { opt = { ...DEFAULTS }; applyOpt("speed"); applyOpt("loop"); setView("Angle"); };
+    root.appendChild(reset);
+  }
+  function buildWatchOptions() {
+    const root = $("st-woptions"); root.innerHTML = "";
+    renderGroups(root, distanceGroups());
+  }
+  function renderGroups(root, list) {
+    for (const [title, items] of list) {
       const det = el("details", "st-group"); det.open = openGroups.has(title);
       det.addEventListener("toggle", () => { det.open ? openGroups.add(title) : openGroups.delete(title); });
       det.appendChild(el("summary", null, title));
@@ -433,19 +495,110 @@ void main(){
       }
       det.appendChild(body); root.appendChild(det);
     }
-    const reset = el("button", "secondary", "Reset all options");
-    reset.onclick = () => { opt = { ...DEFAULTS }; applyOpt("speed"); applyOpt("loop"); setView("Angle"); };
-    root.appendChild(reset);
   }
+
+  // ---------- coloured depth video (Watch tab) ----------
+  const ccv = $("st-color");
+  let cgl = null, cU = {}, cTexD = null, cTexC = null, cTexL = null;
+  const lutW = { sig: "" };
+  const CFS = `precision mediump float;
+uniform sampler2D D, C, L; uniform int hideOut;
+uniform float dmix, lo, hi, lines, lineW, hlOn, hlPos, hlW, inv; uniform vec3 lineCol, hlCol;
+varying vec2 v;
+void main(){
+  float vd = texture2D(D, v).r; if (inv > 0.5) vd = 1.0 - vd;
+  vec3 c = mix(texture2D(C, v).rgb, texture2D(L, vec2(vd, 0.5)).rgb, dmix);
+  if (hideOut == 1 && (vd < lo || vd > hi)) c = vec3(0.0);
+  float u = (vd - lo) / max(hi - lo, 0.001);
+  if (lines > 0.0 && u > 0.0 && u < 1.0 && fract(u * lines) < lineW) c = lineCol;
+  if (hlOn > 0.5 && abs(vd - hlPos) < hlW) c = mix(c, hlCol, 0.85);
+  gl_FragColor = vec4(c, 1.0); }`;
+  function initColorGL() {
+    if (cgl) return true;
+    cgl = ccv.getContext("webgl", { preserveDrawingBuffer: true, alpha: false });
+    if (!cgl) return false;
+    const g = cgl, sh = (type, src) => { const x = g.createShader(type); g.shaderSource(x, src); g.compileShader(x);
+      if (!g.getShaderParameter(x, g.COMPILE_STATUS)) throw new Error(g.getShaderInfoLog(x)); return x; };
+    const pr = g.createProgram();
+    g.attachShader(pr, sh(g.VERTEX_SHADER, "attribute vec2 a; varying vec2 v; void main(){ v = vec2(a.x, 1.0 - a.y) * 0.5 + 0.5; v.y = 1.0 - v.y; gl_Position = vec4(a, 0.0, 1.0); }"));
+    g.attachShader(pr, sh(g.FRAGMENT_SHADER, CFS));
+    g.bindAttribLocation(pr, 0, "a"); g.linkProgram(pr); g.useProgram(pr);
+    for (const n of ["D", "C", "L", "hideOut", "dmix", "lo", "hi", "lines", "lineW", "hlOn", "hlPos", "hlW", "inv", "lineCol", "hlCol"]) cU[n] = g.getUniformLocation(pr, n);
+    const tex = (unit) => { const t = g.createTexture(); g.activeTexture(g.TEXTURE0 + unit); g.bindTexture(g.TEXTURE_2D, t);
+      for (const [k, val] of [[g.TEXTURE_MIN_FILTER, g.LINEAR], [g.TEXTURE_MAG_FILTER, g.LINEAR], [g.TEXTURE_WRAP_S, g.CLAMP_TO_EDGE], [g.TEXTURE_WRAP_T, g.CLAMP_TO_EDGE]]) g.texParameteri(g.TEXTURE_2D, k, val);
+      g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, 1, 1, 0, g.RGBA, g.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255])); return t; };
+    cTexD = tex(0); cTexC = tex(1); cTexL = tex(2); lutW.sig = "";
+    g.uniform1i(cU.D, 0); g.uniform1i(cU.C, 1); g.uniform1i(cU.L, 2);
+    const b = g.createBuffer(); g.bindBuffer(g.ARRAY_BUFFER, b);
+    g.bufferData(g.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), g.STATIC_DRAW);
+    g.enableVertexAttribArray(0); g.vertexAttribPointer(0, 2, g.FLOAT, false, 0, 0);
+    return true;
+  }
+  function drawColor() {
+    const g = cgl;
+    if (ccv.width !== vD.videoWidth || ccv.height !== vD.videoHeight) { ccv.width = vD.videoWidth || 2; ccv.height = vD.videoHeight || 2; }
+    g.viewport(0, 0, ccv.width, ccv.height);
+    if (vD.readyState >= 2) { g.activeTexture(g.TEXTURE0); g.bindTexture(g.TEXTURE_2D, cTexD); g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, vD); }
+    const cv = hasSrc ? vS : vD;
+    if (cv.readyState >= 2) { g.activeTexture(g.TEXTURE1); g.bindTexture(g.TEXTURE_2D, cTexC); g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, cv); }
+    uploadLUT(g, cTexL, lutW);
+    const [lo, hi] = limits(), col = (h) => rgb(h).map((x) => x / 255);
+    g.uniform1i(cU.hideOut, opt.dHide ? 1 : 0); g.uniform1f(cU.inv, opt.invert ? 1 : 0);
+    g.uniform1f(cU.dmix, hasSrc ? opt.dMix / 100 : 1); g.uniform1f(cU.lo, lo); g.uniform1f(cU.hi, hi);
+    g.uniform1f(cU.lines, opt.lines); g.uniform1f(cU.lineW, opt.lineW / 100); g.uniform3fv(cU.lineCol, col(opt.lineCol));
+    g.uniform1f(cU.hlOn, opt.hl ? 1 : 0); g.uniform1f(cU.hlPos, opt.hlPos / 100); g.uniform1f(cU.hlW, opt.hlWidth / 200); g.uniform3fv(cU.hlCol, col(opt.hlCol));
+    g.drawArrays(g.TRIANGLE_STRIP, 0, 4);
+  }
+  let watchKind = "depth";
+  const coloured = () => tab === "watch" && watchKind === "color";
+
+  // Save the coloured version: play the clip once from the start while recording the canvas.
+  let recorded = null, recording = false;
+  async function exportColoured() {
+    const btn = $("st-wexport"), msg = $("st-wexpmsg");
+    if (recorded) {                                          // second tap: hand the file to the share sheet
+      try {
+        if (navigator.canShare && navigator.canShare({ files: [recorded] })) await navigator.share({ files: [recorded] });
+        else { const a = document.createElement("a"); a.href = URL.createObjectURL(recorded); a.download = recorded.name; document.body.appendChild(a); a.click(); a.remove(); }
+      } catch {}
+      return;
+    }
+    if (recording || !ccv.captureStream || typeof MediaRecorder === "undefined") {
+      if (!recording) { msg.className = "msg bad"; msg.textContent = "This browser can't record video from the page."; }
+      return;
+    }
+    const type = ["video/mp4;codecs=avc1", "video/mp4", "video/webm;codecs=vp9", "video/webm"].find((t) => MediaRecorder.isTypeSupported(t));
+    if (!type) { msg.className = "msg bad"; msg.textContent = "This browser can't record video from the page."; return; }
+    recording = true; btn.disabled = true; msg.className = "msg"; msg.textContent = "Recording… let the clip play through once.";
+    const chunks = [], rec = new MediaRecorder(ccv.captureStream(30), { mimeType: type, videoBitsPerSecond: 12e6 });
+    rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    const wasLoop = opt.loop, wasSpeed = opt.speed;
+    vD.loop = vS.loop = false; vD.playbackRate = vS.playbackRate = 1;
+    await setPlaying(false); seek(0);
+    await new Promise((r) => setTimeout(r, 300));
+    rec.start(250); await setPlaying(true);
+    await new Promise((res) => { master.onended = res; });
+    master.onended = null;
+    rec.stop(); await new Promise((r) => { rec.onstop = r; });
+    vD.loop = vS.loop = wasLoop; vD.playbackRate = vS.playbackRate = wasSpeed;
+    const ext = type.includes("mp4") ? "mp4" : "webm";
+    recorded = new File(chunks, `${(clip && clip.title) || "depth"}_coloured.${ext}`, { type: type.split(";")[0] });
+    recording = false; btn.disabled = false;
+    btn.textContent = "Ready. Tap again to save";
+    msg.className = "msg ok"; msg.textContent = `Recorded (${(recorded.size / 1048576).toFixed(1)} MB). Changing a colour setting clears it.`;
+  }
+  $("st-wexport").onclick = exportColoured;
+  const clearRecording = () => { if (recorded) { recorded = null; $("st-wexport").textContent = "Save coloured video"; $("st-wexpmsg").textContent = ""; } };
 
   // ---------- loop ----------
   function frame() {
     raf = 0;
     if (!open) return;
-    if (tab === "3d" || tab === "points") {
+    if (tab === "3d" || tab === "points" || coloured()) {
       if (hasSrc && Math.abs(vD.currentTime - vS.currentTime) > 0.07) vD.currentTime = vS.currentTime;
       sampleDepths();
-      if (tab === "3d") { draw3D(); placeMarkers($("st-m3d"), project3D); }
+      if (coloured()) { if (cgl) drawColor(); }
+      else if (tab === "3d") { draw3D(); placeMarkers($("st-m3d"), project3D); }
       else { draw2D(); placeMarkers($("st-m2d"), (p) => [p.u * p2.clientWidth, p.v * p2.clientHeight]); updatePointValues(); }
       const d = master.duration || 0;
       if (!scrubbing && d) $("st-scrub").value = (master.currentTime / d) * 1000;
@@ -461,10 +614,16 @@ void main(){
     document.querySelectorAll("#st-tabs button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.tab === t)));
     for (const name of ["watch", "3d", "points", "files"]) $("pane-" + name).hidden = name !== t;
     $("pane-3d-options").hidden = t !== "3d"; $("pane-points-list").hidden = t !== "points";
-    $("st-transport").hidden = !(t === "3d" || t === "points") || !!(clip && clip.png);
+    const colour = t === "watch" && watchKind === "color";
+    $("st-transport").hidden = !(t === "3d" || t === "points" || colour) || !!(clip && clip.png);
     const w = $("st-watch");
-    if (t !== "watch") w.pause();
-    if (t !== "3d" && t !== "points") setPlaying(false);
+    if (t !== "watch" || colour) w.pause();
+    if (t !== "3d" && t !== "points" && !colour) setPlaying(false);
+    if (colour) {
+      try { if (!initColorGL()) throw new Error("no webgl"); } catch { $("st-wexpmsg").className = "msg bad"; $("st-wexpmsg").textContent = "This browser couldn't start the colour view."; }
+      buildWatchOptions();
+      if (master.readyState < 2) seek(0.001);
+    }
     if (t === "3d") {
       try { if (!initGL()) throw new Error("no webgl"); $("st-glmsg").hidden = true; }
       catch (e) { $("st-glmsg").hidden = false; $("st-glmsg").textContent = "This browser couldn't start 3D graphics."; }
@@ -486,6 +645,7 @@ void main(){
     hasSrc = !!c.src;
     master = hasSrc ? vS : vD;
     points = store.get("depthpass-pts:" + c.name, []).map((p) => ({ u: p.u, v: p.v, d: null })); selected = -1;
+    planePts = store.get("depthpass-plane:" + c.name, null);
     try {
       const [fd, fs] = await Promise.all([DP.getFile(c.depth.path, c.depth.name), hasSrc ? DP.getFile(c.src.path, c.src.name) : null]);
       if (clip !== c) return;
@@ -498,10 +658,16 @@ void main(){
       for (const id of ["st-stage3d", "st-stage2d"]) $(id).style.aspectRatio = `${vD.videoWidth} / ${vD.videoHeight}`;
       vD.loop = vS.loop = opt.loop;
       // Watch tab
-      const w = $("st-watch"); let kind = "depth";
-      const showWatch = () => { w.src = kind === "depth" ? ud : us; document.querySelectorAll("#st-wseg button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.kind === kind))); };
-      $("st-wseg").hidden = !us;
-      document.querySelectorAll("#st-wseg button").forEach((b) => { b.onclick = () => { kind = b.dataset.kind; showWatch(); }; });
+      const w = $("st-watch"); watchKind = "depth"; clearRecording();
+      $("st-wseg").querySelector('[data-kind="src"]').hidden = !us;
+      const showWatch = () => {
+        const colour = watchKind === "color";
+        w.hidden = colour; $("st-wcolor").hidden = !colour;
+        if (!colour) { const want = watchKind === "depth" ? ud : us; if (w.src !== want) w.src = want; }
+        document.querySelectorAll("#st-wseg button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.kind === watchKind)));
+        setTab("watch");
+      };
+      document.querySelectorAll("#st-wseg button").forEach((b) => { b.onclick = () => { watchKind = b.dataset.kind; showWatch(); }; });
       showWatch();
       // Files tab
       const files = $("st-files"); files.innerHTML = "";

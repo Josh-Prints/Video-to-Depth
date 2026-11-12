@@ -13,6 +13,10 @@ Tap a clip to open it. It has four tabs:
 - **Points**: tap the source video to drop up to 8 points and read how near each spot is on the current frame. "Cut here" puts the 3D cut plane at that point's depth.
 - **Files**: save the videos and download the 16-bit PNG frames.
 
+**3-point cut plane:** in Points, tap 3 spots on the wall and tap "Make a cut plane". The depths are locked at that frame, and the 3D tab's Cut plane can hide what's behind or in front of the plane, outline it, or nudge it.
+
+**Coloured depth:** Watch → Coloured runs the depth video through the distance colour settings (palettes, custom colours, steps, curve, range, contour lines, highlight) and can save the result as a video.
+
 Login: on first visit you paste a **fine-grained token** (this repo only, **Contents: Read and write**, **Actions: Read-only**) and choose a passcode. The token is stored encrypted with that passcode in the browser. After that you log in with the passcode; a login lasts 8 hours or until you close the tab.
 
 **Other devices.** In the page, open "Use on my other devices" and set a password of 10+ characters. Then any phone or computer can log in with your GitHub username and that password, with no token. The token is encrypted with the password (PBKDF2-SHA256, 600k rounds, AES-GCM) and stored at `accounts/<user>.json` on the `status` branch. Anyone who can read the repo can download that file, so the password is the only protection. Use a long one you don't use anywhere else.
