@@ -10,3 +10,4 @@ easydict
 tqdm
 pillow
 pillow-heif
+transformers

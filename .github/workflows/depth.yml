@@ -21,6 +21,9 @@ on:
         type: choice
         options: [vits, vitl]
         default: vits
+      quality:
+        description: "Kaggle model:working size, e.g. vitl:518 (blank = default)"
+        required: false
       max_fps:
         description: "Max FPS"
         default: "30"
@@ -87,6 +90,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           UPLOAD_MSG: ${{ github.event.head_commit.message }}
+          QUALITY: ${{ inputs.quality }}
           KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
           ONLY_FILE: ${{ inputs.file || steps.pick.outputs.files }}
           FORCE: ${{ inputs.force }}

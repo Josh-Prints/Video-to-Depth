@@ -18,7 +18,6 @@ import os, sys, glob, shutil, subprocess, tempfile, time
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".3gp", ".mts", ".m2ts", ".ts",
              ".wmv", ".flv", ".mpg", ".mpeg", ".hevc", ".gif"}
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".bmp", ".tif", ".tiff"}
-IS_PHOTO = False                      # set per file in main()
 AUDIO_EXT = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".aiff", ".aif"}
 
 BACKEND = (os.environ.get("BACKEND") or "local").lower()
@@ -31,10 +30,19 @@ KAGGLE_ENCODER = os.environ.get("KAGGLE_ENCODER") or "vitb:448,vitb:392,vits:518
 INPUT_SIZE = int(os.environ.get("INPUT_SIZE") or 518)   # model working resolution, a multiple of 14
 
 
+PHOTO_MAX = int(os.environ.get("PHOTO_MAX") or 4096)    # longest side kept for a photo's depth PNG
+PHOTO_MODELS = (os.environ.get("PHOTO_MODELS") or "Large,Base,Small").split(",")
+# GPU memory in GB at working size 518 (Large and Base measured on Kaggle, Small a rough guess).
+MEM518 = {"vits": 6.0, "vitb": 14.7, "vitl": 20.0}
+
+
 def kaggle_plan(msg):
     """The upload page puts the chosen quality in the commit message as [model=vitb size=448].
     Returns the model:size pairs to try in order: the choice first, then safer steps down."""
     import re
+    q = re.fullmatch(r"(vit[sbl]):(\d+)", (os.environ.get("QUALITY") or "").strip())   # manual runs
+    if q:
+        msg = f"[model={q.group(1)} size={q.group(2)}]"
     m = re.search(r"\[model=(vit[sbl]) size=(\d+)\]", msg or "")
     if not m:
         return KAGGLE_ENCODER
@@ -142,22 +150,75 @@ def ffmpeg_bin():
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
-def photo_to_clip(src, dst):
-    """Turn a photo into a one-frame H.264 clip the model can read. Pillow applies the phone's
-    rotation flag and reads HEIC; ffmpeg alone gets both wrong on some builds."""
+def run_photo(src, name):
+    """Depth for a still photo with Depth Anything V2 (an image model, so one photo doesn't have to be
+    padded out to a 32-frame clip). Uses the largest model and the highest working size that fits,
+    and saves the depth at the photo's own resolution."""
+    import numpy as np, torch, cv2, imageio
+    import torch.nn.functional as F
     from PIL import Image, ImageOps
+    from transformers import AutoModelForDepthEstimation
     try:
         import pillow_heif
         pillow_heif.register_heif_opener()
     except ImportError:
         pass
-    png = dst + ".png"
-    ImageOps.exif_transpose(Image.open(src)).convert("RGB").save(png)
-    scale = (f"scale='if(gt(iw,ih),min({MAX_RES},iw),-2)':'if(gt(iw,ih),-2,min({MAX_RES},ih))'")
-    cmd = [ffmpeg_bin(), "-y", "-v", "error", "-i", png, "-frames:v", "1", "-r", "30",
-           "-vf", f"{scale},pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p", "-c:v", "libx264", "-crf", "10", dst]
-    if subprocess.run(cmd).returncode != 0:
-        raise RuntimeError(f"Could not read the photo {src}.")
+    img = ImageOps.exif_transpose(Image.open(src)).convert("RGB")
+    if max(img.size) > PHOTO_MAX:
+        img.thumbnail((PHOTO_MAX, PHOTO_MAX), Image.LANCZOS)
+    W, H = img.size
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    sizes = [1554, 1036, 770, 518] if dev == "cuda" else [770, 518]
+    mean, std = np.array([0.485, 0.456, 0.406], np.float32), np.array([0.229, 0.224, 0.225], np.float32)
+    depth = used = None
+    t = time.time()
+    for mname in PHOTO_MODELS:
+        try:
+            model = AutoModelForDepthEstimation.from_pretrained(f"depth-anything/Depth-Anything-V2-{mname}-hf").to(dev).eval()
+        except Exception as e:
+            print(f"Could not load the {mname} photo model: {e}"); continue
+        for s in sizes:
+            s = max(14, min(s, min(W, H)) // 14 * 14)            # never upscale past the photo itself
+            k = s / min(W, H)
+            w, h = max(14, round(W * k / 14) * 14), max(14, round(H * k / 14) * 14)
+            x = (np.asarray(img.resize((w, h), Image.BICUBIC), np.float32) / 255 - mean) / std
+            x = torch.from_numpy(x.transpose(2, 0, 1))[None].to(dev)
+            try:
+                with torch.inference_mode(), torch.autocast(device_type=dev, enabled=(dev == "cuda")):
+                    out = model(pixel_values=x).predicted_depth
+                depth = F.interpolate(out[None].float(), size=(H, W), mode="bicubic", align_corners=False)[0, 0].cpu().numpy()
+                used = f"photo-{mname}:{s}"
+                break
+            except (RuntimeError, MemoryError) as e:
+                if "out of memory" not in str(e).lower() and not isinstance(e, MemoryError):
+                    raise
+                print(f"{mname} at {s} did not fit in memory, trying smaller")
+                del x
+                if dev == "cuda":
+                    torch.cuda.empty_cache()
+        del model
+        if depth is not None:
+            break
+    if depth is None:
+        raise RuntimeError("no photo model fit in memory")
+    print(f"Photo {W}x{H}: {used} on {dev}, {time.time() - t:.0f}s")
+    PROGRESS.update(stage="saving", timing={"spec": used, "seconds": round(time.time() - t), "device": dev})
+    open("used.txt", "w").write(used)
+
+    lo, hi = float(depth.min()), float(depth.max())
+    d01 = np.clip((depth - lo) / (hi - lo + 1e-12), 0, 1)
+    cv2.imwrite(f"output/{name}_depth.png", (d01 * 65535).astype(np.uint16))
+    img.save(f"output/{name}_src.jpg", quality=95)
+    # One-second preview clips so the page's Watch / 3D / Points tabs work on photos too.
+    k = min(1.0, MAX_RES / max(W, H))
+    pw, ph = max(2, int(W * k) // 2 * 2), max(2, int(H * k) // 2 * 2)
+    g = (cv2.resize(d01, (pw, ph), interpolation=cv2.INTER_AREA) * 255).round().astype(np.uint8)
+    rgb = np.asarray(img.resize((pw, ph), Image.LANCZOS))
+    for path, frame, crf in ((f"output/{name}_depth.mp4", np.stack([g, g, g], -1), "12"), (f"output/{name}_src.mp4", rgb, "18")):
+        wr = imageio.get_writer(path, fps=30, macro_block_size=1, codec="libx264", ffmpeg_params=["-crf", crf])
+        for _ in range(30):
+            wr.append_data(frame)
+        wr.close()
 
 
 def normalize(src, dst):
@@ -194,15 +255,39 @@ def run_local(clean, name):
         _model = _model.to(DEVICE).eval()
         torch.set_num_threads(os.cpu_count() or 2)
 
+    # Two GPUs: when one is close to or past its limit, put the image encoder on the first and the
+    # depth head on the second, so neither has to hold the whole model's working memory.
+    ngpu = torch.cuda.device_count() if DEVICE == "cuda" else 0
+    split = False
+    if ngpu >= 2:
+        cap = torch.cuda.get_device_properties(0).total_memory / 2 ** 30
+        need = MEM518[ENCODER] * (INPUT_SIZE / 518) ** 2
+        split = need > 0.8 * cap
+        print(f"{ngpu} GPUs of {cap:.1f} GB, estimated need {need:.1f} GB: {'splitting across two' if split else 'using one'}")
+    if split:
+        import torch.nn.functional as F
+        m = _model
+        m.pretrained.to("cuda:0"); m.head.to("cuda:1")
+        def forward(x):
+            B, T, C, H, W = x.shape
+            feats = m.pretrained.get_intermediate_layers(x.flatten(0, 1), m.intermediate_layer_idx[m.encoder], return_class_token=True)
+            feats = [tuple(t.to("cuda:1") for t in f) for f in feats]
+            depth = m.head(feats, H // 14, W // 14, T)[0]
+            depth = F.relu(F.interpolate(depth, size=(H, W), mode="bilinear", align_corners=True))
+            return depth.squeeze(1).unflatten(0, (B, T)).to("cuda:0")
+        m.forward = forward
+
     import video_depth_anything.video_depth as vd
     def windows(it, *a, **k):          # replaces tqdm in the upstream loop: one step per 32-frame window
         items = list(it)
+        nwin.append(len(items))
         PROGRESS.update(stage="depth", done=0, total=len(items), depth_started=int(time.time()))
         for i, x in enumerate(items):
             yield x
             print(f"window {i + 1}/{len(items)} done", flush=True)
             PROGRESS.update(stage="depth", done=i + 1, total=len(items))
     vd.tqdm = windows
+    nwin = []
 
     frames, fps = read_video_frames(clean, -1, -1, MAX_RES)
     print(f"{len(frames)} frames at {frames.shape[2]}x{frames.shape[1]}, {fps:.2f} fps. Running {ENCODER} at {INPUT_SIZE} on {DEVICE}...")
@@ -210,18 +295,16 @@ def run_local(clean, name):
     with torch.inference_mode():
         depths, fps = _model.infer_video_depth(frames, fps, input_size=INPUT_SIZE, device=DEVICE, fp32=(DEVICE == "cpu"))
     print(f"Inference took {time.time() - t:.0f}s")
+    import json
+    timing = {"spec": f"{ENCODER}:{INPUT_SIZE}", "device": DEVICE, "gpus": ngpu, "split": split,
+              "windows": (nwin or [0])[0], "frames": int(len(frames)), "seconds": round(time.time() - t, 1)}
+    json.dump(timing, open("timing.json", "w"))
+    PROGRESS.update(timing=timing)
 
     PROGRESS.update(stage="saving")
     import imageio
     d = np.asarray(depths, dtype=np.float32)
     lo, hi = float(d.min()), float(d.max())          # one scale for the whole clip
-    if IS_PHOTO:
-        # Full-quality stills for editing, plus a one-second clip so the page's viewer works unchanged.
-        cv2.imwrite(f"output/{name}_depth.png", ((d[0] - lo) / (hi - lo + 1e-12) * 65535).astype(np.uint16))
-        cv2.imwrite(f"output/{name}_src.png", cv2.cvtColor(np.asarray(frames[0]), cv2.COLOR_RGB2BGR))
-        d = np.repeat(d[:1], 30, axis=0)
-        frames = np.repeat(np.asarray(frames)[:1], 30, axis=0)
-        fps = 30
     # Depth first, src last: a half-finished run never leaves a src without its depth.
     w = imageio.get_writer(f"output/{name}_depth.mp4", fps=fps, macro_block_size=1,
                            codec="libx264", ffmpeg_params=["-crf", "12"])
@@ -231,7 +314,7 @@ def run_local(clean, name):
     w.close()
     save_video(frames, f"output/{name}_src.mp4", fps=fps)
 
-    if PNG16 and not IS_PHOTO:
+    if PNG16:
         out = os.path.join(ARTIFACT_DIR, f"{name}_depth16")
         os.makedirs(out, exist_ok=True)
         for i, f in enumerate(d):
@@ -256,7 +339,12 @@ for f in glob.glob("output/*"):
     if not f.endswith(".gitkeep"): os.remove(f)
 SIZE = dict(vitl="Large", vitb="Base", vits="Small")
 ok = False
-for spec in {encs!r}.split(","):
+base = dict(os.environ, BACKEND="local", ONLY_FILE={file!r}, FORCE="true", MAX_RES="{max_res}", MAX_FPS="{max_fps}",
+            GITHUB_EVENT_NAME="", GH_TOKEN="", GITHUB_TOKEN="", PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
+if {photo!r}:
+    subprocess.run([sys.executable, "depth.py"], check=True, env=base)
+    shutil.copy("used.txt", "/kaggle/working/model.txt"); ok = True
+for spec in ([] if ok else {encs!r}.split(",")):
     enc, size = (spec.split(":") + ["518"])[:2]
     sh("mkdir -p vda/checkpoints && curl -fL --retry 3 -o vda/checkpoints/video_depth_anything_%s.pth "
        "https://huggingface.co/depth-anything/Video-Depth-Anything-%s/resolve/main/video_depth_anything_%s.pth" % (enc, SIZE[enc], enc))
@@ -266,7 +354,9 @@ for spec in {encs!r}.split(","):
     r = subprocess.run([sys.executable, "depth.py"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     print(r.stdout[-3000:], flush=True)
     if r.returncode == 0:
-        open("/kaggle/working/model.txt", "w").write(spec); ok = True; break
+        open("/kaggle/working/model.txt", "w").write(spec); ok = True
+        if os.path.exists("timing.json"): shutil.copy("timing.json", "/kaggle/working/timing.json")
+        break
     why = [l for l in r.stdout.splitlines() if "Error" in l or "FAILED" in l][-2:]
     open("/kaggle/working/attempts.txt", "a").write("%s: %s" % (spec, " | ".join(why)[:500]) + chr(10))
 if not ok: raise SystemExit("every model failed")
@@ -320,10 +410,12 @@ def run_kaggle(src, name):
         with open(os.path.join(tmp, "run.py"), "w") as f:
             f.write(KERNEL.format(repo=os.environ["GITHUB_REPOSITORY"], sha=os.environ["GITHUB_SHA"], vda_sha=VDA_SHA,
                                   encs=kaggle_plan(os.environ.get("UPLOAD_MSG")),
-                                  file=os.path.basename(src), max_res=MAX_RES, max_fps=MAX_FPS))
+                                  file=os.path.basename(src), max_res=MAX_RES, max_fps=MAX_FPS,
+                                  photo=os.path.splitext(src)[1].lower() in IMAGE_EXT))
         with open(os.path.join(tmp, "kernel-metadata.json"), "w") as f:
             json.dump({"id": ref, "title": slug, "code_file": "run.py", "language": "python", "kernel_type": "script",
                        "is_private": True, "enable_gpu": True, "enable_internet": True,
+                       "machine_shape": "NvidiaTeslaT4",          # Kaggle's "GPU T4 x2": two 15 GB GPUs
                        "dataset_sources": [], "competition_sources": [], "kernel_sources": []}, f)
         pushed = kaggle("kernels", "push", "-p", tmp)
         if "successfully pushed" not in pushed.lower():
@@ -350,7 +442,10 @@ def run_kaggle(src, name):
             try: tried = open(os.path.join(out, "attempts.txt")).read().strip()
             except OSError: tried = ""
             if tried: print(f"Models that failed on Kaggle first:\n{tried}")
-            PROGRESS.update(kaggle_model=used, kaggle_attempts=tried[-1200:])
+            try: timing = json.load(open(os.path.join(out, "timing.json")))
+            except (OSError, ValueError): timing = None
+            if timing: print(f"Kaggle timing: {timing}")
+            PROGRESS.update(kaggle_model=used, kaggle_attempts=tried[-1200:], timing=timing)
             if f"{name}_depth.mp4" not in got:
                 raise RuntimeError(f"Kaggle finished but returned no depth video (files: {os.listdir(out)})")
             PROGRESS.update(stage="saving")
@@ -397,7 +492,6 @@ def run_space(clean, name):
 
 
 def main():
-    global IS_PHOTO
     files = sorted(f for f in glob.glob("input/*") if os.path.isfile(f) and not f.endswith(".gitkeep"))
     if ONLY:
         files = [f for f in files if os.path.basename(f) in ONLY]
@@ -444,9 +538,11 @@ def main():
                                     kaggle_error=str(e)[-1500:])
             with tempfile.TemporaryDirectory() as tmp:
                 clean = os.path.join(tmp, f"{name}.mp4")
-                IS_PHOTO = os.path.splitext(src)[1].lower() in IMAGE_EXT
-                (photo_to_clip if IS_PHOTO else normalize)(src, clean)
-                run(clean, name)
+                if os.path.splitext(src)[1].lower() in IMAGE_EXT:
+                    run_photo(src, name)
+                else:
+                    normalize(src, clean)
+                    run(clean, name)
             print(f"Saved output/{name}_depth.mp4 and output/{name}_src.mp4")
         except Exception as e:
             print(f"FAILED {src}: {type(e).__name__}: {str(e)[:600]}")
