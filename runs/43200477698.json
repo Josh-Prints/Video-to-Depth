@@ -1,1 +1,1 @@
-{"run_id": "43200477698", "started": 1794479263, "stage": "depth", "file": "citest2.jpg", "file_index": 1, "file_count": 1, "done": 1, "total": 1, "error": null, "updated": 1794479338, "depth_started": 1794479267}
+{"run_id": "43200477698", "started": 1794479263, "stage": "saving", "file": "citest2.jpg", "file_index": 1, "file_count": 1, "done": 1, "total": 1, "error": null, "updated": 1794479339, "depth_started": 1794479267}
