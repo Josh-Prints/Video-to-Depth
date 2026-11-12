@@ -213,8 +213,8 @@ a { color: var(--accent); }
     <section>
       <h2>New clip</h2>
       <label class="picker" for="file">
-        <input id="file" type="file" accept="video/*,.mov,.mp4,.m4v,.mkv,.webm,.avi,.3gp,.mts,.ts">
-        <strong>Choose video</strong>
+        <input id="file" type="file" accept="video/*,image/*,.mov,.mp4,.m4v,.mkv,.webm,.avi,.3gp,.mts,.ts,.heic,.heif">
+        <strong>Choose photo or video</strong>
         <span class="muted">For the original quality, pick from <b>Files</b> (in Photos, Share → Save to Files first). Max 95 MB.</span>
       </label>
       <p id="file-info" class="file" hidden></p>
@@ -321,7 +321,7 @@ a { color: var(--accent); }
   const API = `https://api.github.com/repos/${OWNER}/${REPO}`;
   const MAX = 95 * 1024 * 1024;
   const SESSION_MS = 8 * 3600 * 1000;
-  const VIDEO_RE = /\.(mp4|mov|m4v|mkv|webm|avi|3gp|mts|m2ts|ts|wmv|flv|mpg|mpeg|hevc|gif)$/i;
+  const VIDEO_RE = /\.(mp4|mov|m4v|mkv|webm|avi|3gp|mts|m2ts|ts|wmv|flv|mpg|mpeg|hevc|gif|jpg|jpeg|png|heic|heif|webp|bmp|tif|tiff)$/i;
   document.querySelectorAll(".repo-name").forEach((e) => { e.textContent = `${OWNER}/${REPO}`; });
 
   // ---------- storage ----------
@@ -556,9 +556,9 @@ a { color: var(--accent); }
     if (picked.size > MAX) {
       $("send").disabled = true; $("up-msg").className = "msg bad";
       $("up-msg").textContent = "Too big. GitHub caps files at 100 MB. Film at 1080p 30fps or trim the clip.";
-    } else if (!VIDEO_RE.test(picked.name) && !(picked.type || "").startsWith("video/")) {
+    } else if (!VIDEO_RE.test(picked.name) && !/^(video|image)\//.test(picked.type || "")) {
       $("send").disabled = true; $("up-msg").className = "msg bad";
-      $("up-msg").textContent = "That doesn't look like a video file.";
+      $("up-msg").textContent = "That doesn't look like a photo or video.";
     } else {
       $("send").disabled = false;
     }
@@ -568,7 +568,7 @@ a { color: var(--accent); }
     const dot = name.lastIndexOf(".");
     const base = (dot > 0 ? name.slice(0, dot) : name).replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "clip";
     let ext = dot > 0 ? name.slice(dot).toLowerCase() : ".mov";
-    if (!VIDEO_RE.test(ext)) ext = ".mov";
+    if (!VIDEO_RE.test(ext)) ext = (picked.type || "").startsWith("image/") ? ".jpg" : ".mov";
     const d = new Date(), p = (n) => String(n).padStart(2, "0");
     return `${me}__${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}_${base}${ext}`;
   }
@@ -725,7 +725,7 @@ a { color: var(--accent); }
     const r = await fetch(`${API}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=main`,
       { cache: "no-store", headers: headers({ Accept: "application/vnd.github.raw+json" }) });
     if (!r.ok) throw new Error(`Download failed (${r.status})`);
-    const f = new File([await r.blob()], name, { type: "video/mp4" });
+    const f = new File([await r.blob()], name, { type: /\.png$/i.test(name) ? "image/png" : "video/mp4" });
     blobs.set(path, f);
     return f;
   }
@@ -765,9 +765,9 @@ a { color: var(--accent); }
     const b = document.createElement("button"); b.className = "clip";
     b.innerHTML = '<span class="clip-text"><span class="clip-name"></span><span class="when"></span></span><span class="chev" aria-hidden="true">›</span>';
     b.querySelector(".clip-name").textContent = title;
-    b.querySelector(".when").textContent = when;
+    b.querySelector(".when").textContent = (g.png ? "Photo · " : "") + when;
     const file = (f) => f && { name: f.name, path: `output/${f.name}` };
-    b.onclick = () => Studio.open({ name: n, title, when, depth: file(g.depth), src: file(g.src), zip });
+    b.onclick = () => Studio.open({ name: n, title, when, depth: file(g.depth), src: file(g.src), png: file(g.png), pngSrc: file(g.pngSrc), zip });
     return b;
   }
   function urlFor(path, file) {
@@ -790,12 +790,14 @@ a { color: var(--accent); }
       }
       const groups = {};
       for (const f of files) {
+        const pm = f.name.match(/^(.*)_(depth|src)\.png$/);
+        if (pm) { (groups[pm[1]] ||= {})[pm[2] === "depth" ? "png" : "pngSrc"] = f; continue; }
         const m = f.name.match(/^(.*)_(depth|src)\.mp4$/);
         if (m) (groups[m[1]] ||= {})[m[2]] = f;
       }
       const names = Object.keys(groups).filter((n) => groups[n].depth && isMine(n))
         .sort((a, b) => b.replace(USER_RE, "").localeCompare(a.replace(USER_RE, "")));
-      const sig = names.map((n) => n + groups[n].depth.sha + (groups[n].src ? groups[n].src.sha : "") + (zips[n] ? zips[n].id : "")).join("|");
+      const sig = names.map((n) => n + groups[n].depth.sha + (groups[n].src ? groups[n].src.sha : "") + (zips[n] ? zips[n].id : "") + (groups[n].png ? groups[n].png.sha : "")).join("|");
       if (sig === lastSig) return;
       lastSig = sig;
       if (!names.length) { el.innerHTML = '<p class="muted">Nothing yet. Finished depth videos show up here.</p>'; return; }

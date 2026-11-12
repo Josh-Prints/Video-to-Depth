@@ -17,6 +17,8 @@ import os, sys, glob, shutil, subprocess, tempfile, time
 
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".3gp", ".mts", ".m2ts", ".ts",
              ".wmv", ".flv", ".mpg", ".mpeg", ".hevc", ".gif"}
+IMAGE_EXT = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".bmp", ".tif", ".tiff"}
+IS_PHOTO = False                      # set per file in main()
 AUDIO_EXT = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".aiff", ".aif"}
 
 BACKEND = (os.environ.get("BACKEND") or "local").lower()
@@ -114,6 +116,24 @@ def ffmpeg_bin():
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
+def photo_to_clip(src, dst):
+    """Turn a photo into a one-frame H.264 clip the model can read. Pillow applies the phone's
+    rotation flag and reads HEIC; ffmpeg alone gets both wrong on some builds."""
+    from PIL import Image, ImageOps
+    try:
+        import pillow_heif
+        pillow_heif.register_heif_opener()
+    except ImportError:
+        pass
+    png = dst + ".png"
+    ImageOps.exif_transpose(Image.open(src)).convert("RGB").save(png)
+    scale = (f"scale='if(gt(iw,ih),min({MAX_RES},iw),-2)':'if(gt(iw,ih),-2,min({MAX_RES},ih))'")
+    cmd = [ffmpeg_bin(), "-y", "-v", "error", "-i", png, "-frames:v", "1", "-r", "30",
+           "-vf", f"{scale},pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p", "-c:v", "libx264", "-crf", "10", dst]
+    if subprocess.run(cmd).returncode != 0:
+        raise RuntimeError(f"Could not read the photo {src}.")
+
+
 def normalize(src, dst):
     """Re-encode to plain 8-bit H.264 MP4: bakes in phone rotation, drops HEVC/HDR/audio,
     scales the long side to MAX_RES, caps fps. Phone .MOV files (HEVC, Dolby Vision,
@@ -168,6 +188,13 @@ def run_local(clean, name):
     import imageio
     d = np.asarray(depths, dtype=np.float32)
     lo, hi = float(d.min()), float(d.max())          # one scale for the whole clip
+    if IS_PHOTO:
+        # Full-quality stills for editing, plus a one-second clip so the page's viewer works unchanged.
+        cv2.imwrite(f"output/{name}_depth.png", ((d[0] - lo) / (hi - lo + 1e-12) * 65535).astype(np.uint16))
+        cv2.imwrite(f"output/{name}_src.png", cv2.cvtColor(np.asarray(frames[0]), cv2.COLOR_RGB2BGR))
+        d = np.repeat(d[:1], 30, axis=0)
+        frames = np.repeat(np.asarray(frames)[:1], 30, axis=0)
+        fps = 30
     # Depth first, src last: a half-finished run never leaves a src without its depth.
     w = imageio.get_writer(f"output/{name}_depth.mp4", fps=fps, macro_block_size=1,
                            codec="libx264", ffmpeg_params=["-crf", "12"])
@@ -177,7 +204,7 @@ def run_local(clean, name):
     w.close()
     save_video(frames, f"output/{name}_src.mp4", fps=fps)
 
-    if PNG16:
+    if PNG16 and not IS_PHOTO:
         out = os.path.join(ARTIFACT_DIR, f"{name}_depth16")
         os.makedirs(out, exist_ok=True)
         for i, f in enumerate(d):
@@ -219,6 +246,7 @@ def run_space(clean, name):
 
 
 def main():
+    global IS_PHOTO
     files = sorted(f for f in glob.glob("input/*") if os.path.isfile(f) and not f.endswith(".gitkeep"))
     if ONLY:
         files = [f for f in files if os.path.basename(f) in ONLY]
@@ -230,12 +258,12 @@ def main():
         ext = os.path.splitext(f)[1].lower()
         if ext in AUDIO_EXT:
             print(f"Skipping {f}: audio file, no picture to get depth from.")
-        elif ext in VIDEO_EXT:
+        elif ext in VIDEO_EXT or ext in IMAGE_EXT:
             vids.append(f)
         else:
             print(f"Skipping {f}: unknown extension.")
     if not vids:
-        print("No video found in input/. Nothing to do.")
+        print("No photo or video found in input/. Nothing to do.")
         return
 
     os.makedirs("output", exist_ok=True)
@@ -255,7 +283,8 @@ def main():
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 clean = os.path.join(tmp, f"{name}.mp4")
-                normalize(src, clean)
+                IS_PHOTO = os.path.splitext(src)[1].lower() in IMAGE_EXT
+                (photo_to_clip if IS_PHOTO else normalize)(src, clean)
                 run(clean, name)
             print(f"Saved output/{name}_depth.mp4 and output/{name}_src.mp4")
         except Exception as e:

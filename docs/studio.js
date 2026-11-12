@@ -377,7 +377,7 @@ void main(){
     document.querySelectorAll("#st-tabs button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.tab === t)));
     for (const name of ["watch", "3d", "points", "files"]) $("pane-" + name).hidden = name !== t;
     $("pane-3d-options").hidden = t !== "3d"; $("pane-points-list").hidden = t !== "points";
-    $("st-transport").hidden = !(t === "3d" || t === "points");
+    $("st-transport").hidden = !(t === "3d" || t === "points") || !!(clip && clip.png);
     const w = $("st-watch");
     if (t !== "watch") w.pause();
     if (t !== "3d" && t !== "points") setPlaying(false);
@@ -421,13 +421,16 @@ void main(){
       showWatch();
       // Files tab
       const files = $("st-files"); files.innerHTML = "";
-      for (const [f, label, cls] of [[c.depth, "Save depth video", ""], [c.src, "Save matching source", "secondary"]]) {
+      const saves = c.png
+        ? [[c.png, "Save depth image (16-bit PNG)", ""], [c.pngSrc, "Save matching source image", "secondary"]]
+        : [[c.depth, "Save depth video", ""], [c.src, "Save matching source", "secondary"]];
+      for (const [f, label, cls] of saves) {
         if (!f) continue;
         const b = el("button", cls, label); b.dataset.label = label; b.onclick = () => DP.saveVideo(b, f.path, f.name);
         files.appendChild(b);
       }
       if (c.zip) { const a = el("a", "btn secondary", `Download 16-bit PNG frames (${(c.zip.size / 1048576).toFixed(0)} MB zip)`); a.href = c.zip.browser_download_url; files.appendChild(a); }
-      else files.appendChild(el("p", "muted", "No 16-bit PNG frames for this clip. Clips processed from now on include them."));
+      else if (!c.png) files.appendChild(el("p", "muted", "No 16-bit PNG frames for this clip. Clips processed from now on include them."));
       $("st-status").hidden = true; $("st-main").hidden = false;
       setTab("watch");
     } catch (e) {

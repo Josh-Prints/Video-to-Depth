@@ -8,3 +8,5 @@ imageio-ffmpeg
 einops
 easydict
 tqdm
+pillow
+pillow-heif
