@@ -995,7 +995,7 @@ a { color: var(--accent); }
   // ---------- version ----------
   // Bump APP_VERSION with each change to the site. The build line shows which commit Pages is serving,
   // so a stale cached page is easy to spot.
-  const APP_VERSION = "1.15";
+  const APP_VERSION = "1.16";
   $("version").textContent = `Depth Pass v${APP_VERSION}`;
   fetch(`${API}/commits/main`, { cache: "no-store", headers: token ? headers() : { Accept: "application/vnd.github+json" } })
     .then((r) => (r.ok ? r.json() : null))
