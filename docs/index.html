@@ -133,6 +133,9 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 28px; marg
 .st-rval { font: 13px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
 .st-toggle { display: flex; align-items: center; gap: 10px; font-size: 0.95rem; }
 .st-toggle input { width: 22px; height: 22px; accent-color: var(--accent); }
+.st-toggle input[type=color] { width: 44px; height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; }
+#st-legend { display: grid; gap: 4px; }
+#st-lut { display: block; width: 100%; height: 14px; border-radius: 4px; border: 1px solid var(--line); }
 .st-prow { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px 12px; align-items: center; padding: 14px 0; border-top: 1px solid var(--line); }
 .st-prow:first-child { border-top: 0; }
 .st-pmid { display: grid; gap: 6px; }
@@ -230,14 +233,14 @@ a { color: var(--accent); }
             <div class="st-seg" id="q-model">
               <button data-m="vits">Small</button><button data-m="vitb">Base</button><button data-m="vitl">Large</button>
             </div>
-            <p class="muted">Bigger models judge depth more accurately and need more GPU memory.</p>
+            <p class="muted">Bigger models judge depth more accurately and take longer.</p>
           </div>
           <div class="st-field">
             <div class="st-rhead"><label class="st-label" for="q-size">Working resolution</label><span class="st-rval" id="q-size-val"></span></div>
             <input id="q-size" type="range" min="280" max="518" step="14">
-            <p class="muted">Higher keeps finer edges and needs more memory. The saved video size doesn't change.</p>
+            <p class="muted">Higher keeps finer edges and takes longer. The saved video size doesn't change.</p>
           </div>
-          <p id="q-fit" class="msg"></p>
+          <p id="q-time" class="muted"></p>
         </div>
       </details>
       <button id="send" disabled>Upload and make depth</button>
@@ -301,6 +304,10 @@ a { color: var(--accent); }
 
     <div id="pane-3d" class="pane" hidden>
       <div class="st-stage" id="st-stage3d"><canvas id="st-gl"></canvas><div class="st-markers" id="st-m3d"></div></div>
+      <div id="st-legend" hidden>
+        <canvas id="st-lut" width="256" height="1"></canvas>
+        <div class="ramp-labels"><span>far</span><span>near</span></div>
+      </div>
       <p id="st-glmsg" class="msg bad" hidden></p>
       <p class="muted">Drag to rotate. Pinch to zoom. Two fingers to move.</p>
     </div>
@@ -569,31 +576,58 @@ a { color: var(--accent); }
 
   // ---------- quality choice ----------
   const MODELS = { vits: "Small", vitb: "Base", vitl: "Large" };
-  // GPU memory at working size 518, in GB. Large and Base were measured on Kaggle's 14.5 GB GPU
-  // (Large ran out asking for ~20, Base missed by ~0.1); Small is a rough guess. Scales with size squared.
-  const MEM518 = { vits: 6, vitb: 14.7, vitl: 20 }, GPU_GB = 14.5;
-  let quality = { model: "vitb", size: 448 };
+  let quality = { model: "vitl", size: 518 };
   try { const q = JSON.parse(ls.get("depthpass-quality") || "null"); if (q && MODELS[q.model]) quality = q; } catch {}
   function renderQuality() {
-    const need = MEM518[quality.model] * (quality.size / 518) ** 2;
     $("q-summary").textContent = `${MODELS[quality.model]} at ${quality.size}`;
     $("q-size").value = quality.size; $("q-size-val").textContent = quality.size;
     document.querySelectorAll("#q-model button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.m === quality.model)));
-    const fit = $("q-fit"), est = `Estimated ${need.toFixed(1)} GB of the GPU's ${GPU_GB} GB.`;
-    if (need <= GPU_GB * 0.9) { fit.className = "msg ok"; fit.textContent = `${est} Should fit.`; }
-    else if (need <= GPU_GB) { fit.className = "msg warn"; fit.textContent = `${est} Borderline. If it doesn't fit, the job steps down by itself.`; }
-    else { fit.className = "msg bad"; fit.textContent = `${est} Too big. The job will step down to a lower setting by itself.`; }
     ls.set("depthpass-quality", JSON.stringify(quality));
+    $("q-time").textContent = timeText();
+    $("q-summary").textContent += clipInfo && clipInfo.photo ? " (not used for photos)" : "";
+  }
+
+  // ---------- time estimate ----------
+  // Measured on Kaggle with a 9.5 s clip (13 chunks of 32 frames): seconds per chunk at working size 518,
+  // and the fixed time around it (starting the machine, fetching the model, saving). Scales with size squared.
+  const SEC_PER_CHUNK = { vits: 4.7, vitb: 8.4, vitl: 18.7 }, FIXED_SEC = { vits: 250, vitb: 250, vitl: 250 }, PHOTO_SEC = 180;
+  let clipInfo = null;            // null = nothing picked, {photo: true}, or {seconds: number|null}
+  function timeText() {
+    if (!clipInfo) return "Choose a clip to see how long it should take.";
+    if (clipInfo.photo) return `Photos always use the best photo model at the photo's full resolution. About ${Math.round(PHOTO_SEC / 60)} min.`;
+    if (!clipInfo.seconds) return "Couldn't read this clip's length, so no time estimate.";
+    const chunks = Math.ceil(clipInfo.seconds * 30 / 22);
+    const sec = FIXED_SEC[quality.model] + chunks * SEC_PER_CHUNK[quality.model] * (quality.size / 518) ** 2;
+    return `About ${Math.max(1, Math.round(sec / 60))} min for this ${clipInfo.seconds.toFixed(1)} s clip.`;
+  }
+  function probeClip(file) {
+    clipInfo = null;
+    if (!file) { renderQuality(); return; }
+    if ((file.type || "").startsWith("image/") || /\.(jpe?g|png|heic|heif|webp|bmp|tiff?)$/i.test(file.name)) { clipInfo = { photo: true }; renderQuality(); return; }
+    const v = document.createElement("video"), url = URL.createObjectURL(file);
+    let done = false;
+    const finish = (seconds) => { if (done) return; done = true; URL.revokeObjectURL(url); if (picked === file) { clipInfo = { seconds }; renderQuality(); } };
+    v.preload = "metadata"; v.muted = true;
+    v.onloadedmetadata = () => finish(isFinite(v.duration) && v.duration > 0 ? v.duration : null);
+    v.onerror = () => finish(null);
+    setTimeout(() => finish(null), 6000);
+    v.src = url;
+    renderQuality();
   }
   document.querySelectorAll("#q-model button").forEach((b) => { b.onclick = () => { quality.model = b.dataset.m; renderQuality(); }; });
   $("q-size").oninput = () => { quality.size = +$("q-size").value; renderQuality(); };
   renderQuality();
-  const QUALITY_TEXT = (spec) => { const [m, sz] = String(spec).split(":"); return MODELS[m] ? `${MODELS[m]} at ${sz}` : ""; };
+  const QUALITY_TEXT = (spec) => {
+    const [m, sz] = String(spec).split(":");
+    if (m.startsWith("photo-")) return `photo model ${m.slice(6)} at ${sz}`;
+    return MODELS[m] ? `${MODELS[m]} at ${sz}` : "";
+  };
 
   // ---------- upload ----------
   let picked = null;
   $("file").onchange = () => {
     picked = $("file").files[0] || null;
+    probeClip(picked);
     $("up-msg").textContent = ""; $("up-msg").className = "msg";
     if (!picked) { $("file-info").hidden = true; $("send").disabled = true; return; }
     $("file-info").hidden = false;
@@ -651,7 +685,7 @@ a { color: var(--accent); }
       $("prog").firstChild.style.width = "100%";
       $("up-msg").className = "msg ok";
       $("up-msg").textContent = "Uploaded. Progress appears below within a minute.";
-      $("file").value = ""; picked = null; $("file-info").hidden = true;
+      $("file").value = ""; picked = null; $("file-info").hidden = true; probeClip(null);
       pendingUntil = Date.now() + 120000;
       setTimeout(() => refresh(true), 4000);
     } catch (e) {
@@ -782,7 +816,7 @@ a { color: var(--accent); }
     const r = await fetch(`${API}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=main`,
       { cache: "no-store", headers: headers({ Accept: "application/vnd.github.raw+json" }) });
     if (!r.ok) throw new Error(`Download failed (${r.status})`);
-    const f = new File([await r.blob()], name, { type: /\.png$/i.test(name) ? "image/png" : "video/mp4" });
+    const f = new File([await r.blob()], name, { type: /\.png$/i.test(name) ? "image/png" : /\.jpg$/i.test(name) ? "image/jpeg" : "video/mp4" });
     blobs.set(path, f);
     return f;
   }
@@ -847,7 +881,7 @@ a { color: var(--accent); }
       }
       const groups = {};
       for (const f of files) {
-        const pm = f.name.match(/^(.*)_(depth|src)\.png$/);
+        const pm = f.name.match(/^(.*)_(depth|src)\.(png|jpg)$/);
         if (pm) { (groups[pm[1]] ||= {})[pm[2] === "depth" ? "png" : "pngSrc"] = f; continue; }
         const m = f.name.match(/^(.*)_(depth|src)\.mp4$/);
         if (m) (groups[m[1]] ||= {})[m[2]] = f;
