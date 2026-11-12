@@ -162,6 +162,7 @@ details[open] summary { margin-bottom: 10px; }
 ol { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; }
 code { font: 0.9em var(--mono); background: var(--bg); padding: 1px 5px; border-radius: 4px; }
 a { color: var(--accent); }
+.version { text-align: center; font: 12px var(--mono); color: var(--muted); padding: 24px 0 8px; font-variant-numeric: tabular-nums; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 </style>
 </head>
@@ -394,6 +395,7 @@ a { color: var(--accent); }
   <video id="st-vs" class="st-hidden" playsinline muted></video>
 </div>
 
+<footer id="version" class="version"></footer>
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
@@ -989,6 +991,19 @@ a { color: var(--accent); }
   }
   $("refresh").onclick = () => refresh(true);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(true); });
+
+  // ---------- version ----------
+  // Bump APP_VERSION with each change to the site. The build line shows which commit Pages is serving,
+  // so a stale cached page is easy to spot.
+  const APP_VERSION = "1.15";
+  $("version").textContent = `Depth Pass v${APP_VERSION}`;
+  fetch(`${API}/commits/main`, { cache: "no-store", headers: token ? headers() : { Accept: "application/vnd.github+json" } })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((c) => {
+      if (!c || !c.sha) return;
+      const d = new Date(c.commit.committer.date).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+      $("version").textContent = `Depth Pass v${APP_VERSION} · build ${c.sha.slice(0, 7)} · ${d}`;
+    }).catch(() => {});
 
   // ---------- boot ----------
   try {
