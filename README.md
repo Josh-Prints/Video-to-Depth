@@ -1,6 +1,6 @@
 # Video-to-Depth
 
-Upload a video to `input/`. GitHub Actions runs [Video Depth Anything](https://github.com/DepthAnything/Video-Depth-Anything) on it, using the official weights from Hugging Face, and commits the depth video to `output/`. Nothing runs on your phone, so you can close the tab.
+Upload a photo or video to `input/`. GitHub Actions runs [Video Depth Anything](https://github.com/DepthAnything/Video-Depth-Anything) on it, using the official weights from Hugging Face, and commits the depth video to `output/`. Nothing runs on your phone, so you can close the tab.
 
 ## Easiest: the upload page
 **https://josh-prints.github.io/Video-to-Depth/** (once GitHub Pages is on: Settings → Pages → Source: *Deploy from a branch*, Branch: `main`, folder `/docs`).
