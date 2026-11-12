@@ -8,7 +8,7 @@
   };
   const COLORS = ["#ff5d5d", "#ffb020", "#3ddc84", "#40c4ff", "#b388ff", "#ff80ab", "#f4ff81", "#ffffff"];
   const DEFAULTS = {
-    style: "mesh", strength: 0.6, density: 240, pointSize: 3, invert: false, edge: 35,
+    style: "mesh", strength: 0.6, density: 480, pointSize: 3, invert: false, edge: 35,
     color: "video", bright: 1, bg: "dark",
     dPalette: "turbo", dFarCol: "#1b1f5e", dMidCol: "#e0457b", dNearCol: "#ffd34d",
     dMix: 100, dLo: 0, dHi: 100, dGamma: 1, dSteps: 0, dFlip: false, dHide: false,
@@ -76,7 +76,7 @@
 
   // ---------- GL ----------
   const glc = $("st-gl");
-  let gl = null, prog = null, U = {}, texD = null, texC = null, texL = null, deriv = false;
+  let gl = null, prog = null, U = {}, texD = null, texC = null, texL = null, deriv = false, uint32 = false;
   let grid = { n: 0, verts: 0, tri: 0, line: 0, vb: null, tb: null, lb: null };
   let M = new Float32Array(16);
 
@@ -86,29 +86,38 @@ varying vec2 v; varying float vd; varying vec3 vp;
 void main(){ float d = texture2D(D, a).r; if (inv > 0.5) d = 1.0 - d; vd = d; v = a;
   vp = vec3((a.x - 0.5) * asp.x, (0.5 - a.y) * asp.y, (d - 0.5) * S);
   gl_Position = M * vec4(vp, 1.0); gl_PointSize = ps; }`;
-  const FS = (d) => `${d ? "#extension GL_OES_standard_derivatives : enable\n" : ""}precision mediump float;
+  // Edges fade over about one screen pixel (fwidth) instead of a hard keep/throw-away per pixel; with
+  // alpha-to-coverage on, the GPU turns that fade into smooth multisampled edges without sorting.
+  const AA = (d) => d ? "#extension GL_OES_standard_derivatives : enable\n#define FW(x) max(fwidth(x), 1e-5)\n" : "#define FW(x) 1e-5\n";
+  const FS = (d) => `${AA(d)}precision mediump float;
 uniform sampler2D C, L; uniform int mode, cutMode, hideOut, planeMode;
 uniform float cut, edge, bright, dmix, lo, hi, lines, lineW, hlOn, hlPos, hlW; uniform vec3 lineCol, hlCol; uniform vec4 plane;
 varying vec2 v; varying float vd; varying vec3 vp;
+float keep(float x) { float w = FW(x) * 0.75; return smoothstep(-w, w, x); }   // 1 where x > 0, soft edge
 void main(){
+  float a = 1.0;
   float pd = dot(plane.xyz, vp) + plane.w;            // > 0: in front of the 3-point plane
-  if (planeMode == 1 && pd < 0.0) discard;
-  if (planeMode == 2 && pd > 0.0) discard;
-  if (cutMode == 1 && vd < cut) discard;
-  if (cutMode == 2 && vd > cut) discard;
-  ${d ? "if (edge > 0.0 && fwidth(vd) > edge) discard;" : ""}
+  if (planeMode == 1) a *= keep(pd);
+  if (planeMode == 2) a *= keep(-pd);
+  if (cutMode == 1) a *= keep(vd - cut);
+  if (cutMode == 2) a *= keep(cut - vd);
+  ${d ? "if (edge > 0.0) a *= 1.0 - smoothstep(edge * 0.75, edge * 1.35, fwidth(vd));" : ""}
   vec3 c = texture2D(C, v).rgb;
   if (mode == 1) {
-    if (hideOut == 1 && (vd < lo || vd > hi)) discard;
+    if (hideOut == 1) a *= keep(vd - lo) * keep(hi - vd);
     c = mix(c, texture2D(L, vec2(vd, 0.5)).rgb, dmix);
     float u = (vd - lo) / max(hi - lo, 0.001);
-    if (lines > 0.0 && u > 0.0 && u < 1.0 && fract(u * lines) < lineW) c = lineCol;
-    if (hlOn > 0.5 && abs(vd - hlPos) < hlW) c = mix(c, hlCol, 0.85);
+    if (lines > 0.0 && u > 0.0 && u < 1.0) {
+      float t = u * lines, dl = abs(t - floor(t + 0.5)), fw = FW(t);
+      c = mix(c, lineCol, 1.0 - smoothstep(lineW * 0.5 - fw, lineW * 0.5 + fw, dl));
+    }
+    if (hlOn > 0.5) { float fw = FW(vd); c = mix(c, hlCol, 0.85 * (1.0 - smoothstep(hlW - fw, hlW + fw, abs(vd - hlPos)))); }
   }
   c *= bright;
-  if (cutMode != 0 && abs(vd - cut) < 0.012) c = mix(c, vec3(0.2, 0.55, 1.0), 0.85);
-  if (planeMode != 0 && abs(pd) < 0.006) c = mix(c, vec3(0.2, 0.55, 1.0), 0.85);
-  gl_FragColor = vec4(c, 1.0); }`;
+  if (cutMode == 3) { float fw = FW(vd); c = mix(c, vec3(0.2, 0.55, 1.0), 0.85 * (1.0 - smoothstep(0.012 - fw, 0.012 + fw, abs(vd - cut)))); }
+  if (planeMode == 3) { float fw = FW(pd); c = mix(c, vec3(0.2, 0.55, 1.0), 0.85 * (1.0 - smoothstep(0.006 - fw, 0.006 + fw, abs(pd)))); }
+  if (a < 0.02) discard;
+  gl_FragColor = vec4(c, a); }`;
 
   function initGL() {
     if (gl) return true;
@@ -130,18 +139,21 @@ void main(){
     texD = tex(0); texC = tex(1); texL = tex(2); lut3.sig = "";
     gl.uniform1i(U.D, 0); gl.uniform1i(U.C, 1); gl.uniform1i(U.L, 2);
     gl.enable(gl.DEPTH_TEST);
+    gl.enable(gl.SAMPLE_ALPHA_TO_COVERAGE);
+    uint32 = !!gl.getExtension("OES_element_index_uint");
     return true;
   }
 
   function buildGrid() {
-    const n = opt.density;
+    const n = uint32 ? opt.density : Math.min(opt.density, 320);
     if (grid.n === n + ":" + aspect.toFixed(3)) return;
     const nx = aspect >= 1 ? n : Math.max(8, Math.round(n * aspect));
     const ny = aspect >= 1 ? Math.max(8, Math.round(n / aspect)) : n;
     const w = nx + 1, h = ny + 1;
     const v = new Float32Array(w * h * 2);
     for (let y = 0, i = 0; y < h; y++) for (let x = 0; x < w; x++) { v[i++] = x / nx; v[i++] = y / ny; }
-    const t = new Uint16Array(nx * ny * 6), l = new Uint16Array((nx * h + ny * w) * 2);
+    const big = w * h > 65535, IA = big ? Uint32Array : Uint16Array;
+    const t = new IA(nx * ny * 6), l = new IA((nx * h + ny * w) * 2);
     let ti = 0, li = 0;
     for (let y = 0; y < ny; y++) for (let x = 0; x < nx; x++) {
       const a = y * w + x, b = a + 1, c = a + w, d = c + 1;
@@ -150,7 +162,7 @@ void main(){
     for (let y = 0; y < h; y++) for (let x = 0; x < nx; x++) { l[li++] = y * w + x; l[li++] = y * w + x + 1; }
     for (let y = 0; y < ny; y++) for (let x = 0; x < w; x++) { l[li++] = y * w + x; l[li++] = (y + 1) * w + x; }
     for (const k of ["vb", "tb", "lb"]) if (grid[k]) gl.deleteBuffer(grid[k]);
-    grid = { n: n + ":" + aspect.toFixed(3), verts: w * h, tri: t.length, line: l.length,
+    grid = { n: n + ":" + aspect.toFixed(3), type: big ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT, verts: w * h, tri: t.length, line: l.length,
       vb: gl.createBuffer(), tb: gl.createBuffer(), lb: gl.createBuffer() };
     gl.bindBuffer(gl.ARRAY_BUFFER, grid.vb); gl.bufferData(gl.ARRAY_BUFFER, v, gl.STATIC_DRAW);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, grid.tb); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, t, gl.STATIC_DRAW);
@@ -211,9 +223,24 @@ void main(){
     gl.uniform1f(U.bright, opt.bright);
     gl.bindBuffer(gl.ARRAY_BUFFER, grid.vb); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
     if (opt.style === "points") gl.drawArrays(gl.POINTS, 0, grid.verts);
-    else if (opt.style === "wire") { gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, grid.lb); gl.drawElements(gl.LINES, grid.line, gl.UNSIGNED_SHORT, 0); }
-    else { gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, grid.tb); gl.drawElements(gl.TRIANGLES, grid.tri, gl.UNSIGNED_SHORT, 0); }
+    else if (opt.style === "wire") { gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, grid.lb); gl.drawElements(gl.LINES, grid.line, grid.type, 0); }
+    else { gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, grid.tb); gl.drawElements(gl.TRIANGLES, grid.tri, grid.type, 0); }
   }
+
+  // ---------- stage size ----------
+  // Each stage keeps the video's shape and fits inside the pinned area: full column width, capped in height.
+  const wide = () => window.matchMedia("(min-width: 960px)").matches;
+  function fitStages() {
+    const ar = (vD.videoWidth || 16) / (vD.videoHeight || 9);
+    const maxH = wide() ? Math.max(240, window.innerHeight - 230) : Math.round(window.innerHeight * 0.42);
+    document.documentElement.style.setProperty("--stage-h", maxH + "px");
+    for (const id of ["st-stage3d", "st-stage2d"]) {
+      const st = $(id), colW = st.parentElement.clientWidth || st.parentElement.parentElement.clientWidth;
+      const w = Math.min(colW, maxH * ar);
+      st.style.width = Math.floor(w) + "px"; st.style.height = Math.floor(w / ar) + "px";
+    }
+  }
+  window.addEventListener("resize", () => { if (open) fitStages(); });
 
   // ---------- 3-point cut plane ----------
   let planePts = null;                       // [{u, v, d}] x3, depths locked when the plane was made
@@ -400,7 +427,7 @@ void main(){
     ["Shape", [
       ["seg", "style", "Draw as", [["mesh", "Surface"], ["points", "Dots"], ["wire", "Wireframe"]]],
       ["range", "strength", "Depth strength", 0, 2, 0.05],
-      ["seg", "density", "Detail", [[96, "Low"], [160, "Medium"], [240, "High"], [320, "Max"]]],
+      ["seg", "density", "Detail", [[160, "Low"], [240, "Medium"], [320, "High"], ...(uint32 ? [[480, "Very high"], [640, "Max"]] : [])]],
       ["range", "pointSize", "Dot size", 1, 8, 0.5],
       ["range", "edge", "Hide stretched edges", 0, 100, 5],
       ["toggle", "invert", "Flip near and far"],
@@ -501,17 +528,21 @@ void main(){
   const ccv = $("st-color");
   let cgl = null, cU = {}, cTexD = null, cTexC = null, cTexL = null;
   const lutW = { sig: "" };
-  const CFS = `precision mediump float;
+  const CFS = (d) => `${AA(d)}precision mediump float;
 uniform sampler2D D, C, L; uniform int hideOut;
 uniform float dmix, lo, hi, lines, lineW, hlOn, hlPos, hlW, inv; uniform vec3 lineCol, hlCol;
 varying vec2 v;
 void main(){
   float vd = texture2D(D, v).r; if (inv > 0.5) vd = 1.0 - vd;
   vec3 c = mix(texture2D(C, v).rgb, texture2D(L, vec2(vd, 0.5)).rgb, dmix);
-  if (hideOut == 1 && (vd < lo || vd > hi)) c = vec3(0.0);
+  float fv = FW(vd);
+  if (hideOut == 1) c *= smoothstep(-fv, fv, vd - lo) * smoothstep(-fv, fv, hi - vd);
   float u = (vd - lo) / max(hi - lo, 0.001);
-  if (lines > 0.0 && u > 0.0 && u < 1.0 && fract(u * lines) < lineW) c = lineCol;
-  if (hlOn > 0.5 && abs(vd - hlPos) < hlW) c = mix(c, hlCol, 0.85);
+  if (lines > 0.0 && u > 0.0 && u < 1.0) {
+    float t = u * lines, dl = abs(t - floor(t + 0.5)), fw = FW(t);
+    c = mix(c, lineCol, 1.0 - smoothstep(lineW * 0.5 - fw, lineW * 0.5 + fw, dl));
+  }
+  if (hlOn > 0.5) c = mix(c, hlCol, 0.85 * (1.0 - smoothstep(hlW - fv, hlW + fv, abs(vd - hlPos))));
   gl_FragColor = vec4(c, 1.0); }`;
   function initColorGL() {
     if (cgl) return true;
@@ -521,7 +552,7 @@ void main(){
       if (!g.getShaderParameter(x, g.COMPILE_STATUS)) throw new Error(g.getShaderInfoLog(x)); return x; };
     const pr = g.createProgram();
     g.attachShader(pr, sh(g.VERTEX_SHADER, "attribute vec2 a; varying vec2 v; void main(){ v = vec2(a.x, 1.0 - a.y) * 0.5 + 0.5; v.y = 1.0 - v.y; gl_Position = vec4(a, 0.0, 1.0); }"));
-    g.attachShader(pr, sh(g.FRAGMENT_SHADER, CFS));
+    g.attachShader(pr, sh(g.FRAGMENT_SHADER, CFS(!!g.getExtension("OES_standard_derivatives"))));
     g.bindAttribLocation(pr, 0, "a"); g.linkProgram(pr); g.useProgram(pr);
     for (const n of ["D", "C", "L", "hideOut", "dmix", "lo", "hi", "lines", "lineW", "hlOn", "hlPos", "hlW", "inv", "lineCol", "hlCol"]) cU[n] = g.getUniformLocation(pr, n);
     const tex = (unit) => { const t = g.createTexture(); g.activeTexture(g.TEXTURE0 + unit); g.bindTexture(g.TEXTURE_2D, t);
@@ -614,6 +645,7 @@ void main(){
     document.querySelectorAll("#st-tabs button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.tab === t)));
     for (const name of ["watch", "3d", "points", "files"]) $("pane-" + name).hidden = name !== t;
     $("pane-3d-options").hidden = t !== "3d"; $("pane-points-list").hidden = t !== "points";
+    $("st-wcolor-opts").hidden = !(t === "watch" && watchKind === "color");
     const colour = t === "watch" && watchKind === "color";
     $("st-transport").hidden = !(t === "3d" || t === "points" || colour) || !!(clip && clip.png);
     const w = $("st-watch");
@@ -632,6 +664,7 @@ void main(){
     if (t === "points") renderPointList();
     if ((t === "3d" || t === "points") && master.readyState < 2) seek(0.001);
     if (!raf) raf = requestAnimationFrame(frame);
+    requestAnimationFrame(fitStages);
   }
   document.querySelectorAll("#st-tabs button").forEach((b) => { b.onclick = () => setTab(b.dataset.tab); });
 
@@ -655,7 +688,7 @@ void main(){
       if (clip !== c) return;
       aspect = (vD.videoWidth || 16) / (vD.videoHeight || 9);
       samp.height = Math.round(samp.width / aspect);
-      for (const id of ["st-stage3d", "st-stage2d"]) $(id).style.aspectRatio = `${vD.videoWidth} / ${vD.videoHeight}`;
+      fitStages();
       vD.loop = vS.loop = opt.loop;
       // Watch tab
       const w = $("st-watch"); watchKind = "depth"; clearRecording();

@@ -23,7 +23,7 @@
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html, body { margin: 0; max-width: 100%; overflow-x: hidden; }
+html, body { margin: 0; max-width: 100%; overflow-x: clip; }
 body {
   background: var(--bg); color: var(--fg); font: 16px/1.5 var(--sans);
   padding-block: max(16px, env(safe-area-inset-top, 0px)) max(32px, env(safe-area-inset-bottom, 0px));
@@ -102,6 +102,16 @@ details.fold > summary { font-size: 0.8rem; text-transform: uppercase; letter-sp
 
 /* Clip view */
 #studio { max-width: 560px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+.st-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+.st-left, .st-right { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-content: start; min-width: 0; }
+/* The picture stays in view while the options scroll. */
+.st-left { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); padding-block: 8px; align-self: start; }
+@media (min-width: 960px) {
+  #studio { max-width: none; }
+  .st-layout { grid-template-columns: minmax(0, 1.8fr) minmax(340px, 1fr); align-items: start; }
+  .st-left { top: 16px; padding-block: 0; }
+  .st-right { max-width: 520px; }
+}
 #st-main { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
 .st-top { display: flex; align-items: center; gap: 12px; }
 .st-head { flex: 1; min-width: 0; display: grid; gap: 2px; }
@@ -110,7 +120,7 @@ details.fold > summary { font-size: 0.8rem; text-transform: uppercase; letter-sp
 .st-seg { display: flex; gap: 6px; flex-wrap: wrap; }
 .st-seg button { flex: 1 1 auto; padding: 10px 12px; font-size: 0.9rem; background: transparent; color: var(--muted); border: 1px solid var(--line); }
 .st-seg button[aria-pressed=true] { color: var(--accent); border-color: var(--accent); background: var(--panel); }
-.st-stage { position: relative; width: 100%; max-height: 62vh; margin: 0 auto; border-radius: 10px; overflow: hidden; background: #000; border: 1px solid var(--line); }
+.st-stage { position: relative; width: 100%; margin: 0 auto; border-radius: 10px; overflow: hidden; background: #000; border: 1px solid var(--line); }
 .st-stage canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 #st-2d { touch-action: manipulation; cursor: crosshair; }
 .st-markers { position: absolute; inset: 0; pointer-events: none; }
@@ -135,7 +145,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 28px; marg
 .st-toggle input { width: 22px; height: 22px; accent-color: var(--accent); }
 .st-toggle input[type=color] { width: 44px; height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; }
 #st-legend, #st-wlegend { display: grid; gap: 4px; }
-#st-color { display: block; width: 100%; max-height: 62vh; object-fit: contain; border-radius: 8px; background: #000; }
+#st-color { display: block; width: 100%; max-height: var(--stage-h, 42vh); object-fit: contain; border-radius: 8px; background: #000; }
 #st-woptions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 #st-lut, #st-wlut { display: block; width: 100%; height: 14px; border-radius: 4px; border: 1px solid var(--line); }
 .st-prow { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px 12px; align-items: center; padding: 14px 0; border-top: 1px solid var(--line); }
@@ -144,7 +154,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 28px; marg
 .st-pval { font: 500 15px var(--mono); font-variant-numeric: tabular-nums; }
 .st-pbtns { grid-column: 2; display: flex; gap: 8px; }
 .st-files { display: grid; gap: 12px; }
-#st-watch { max-height: 62vh; }
+#st-watch { max-height: var(--stage-h, 42vh); }
 details summary { cursor: pointer; color: var(--accent); font-weight: 500; }
 details[open] summary { margin-bottom: 10px; }
 ol { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; }
@@ -299,57 +309,68 @@ a { color: var(--accent); }
       <button data-tab="watch">Watch</button><button data-tab="3d">3D</button><button data-tab="points">Points</button><button data-tab="files">Files</button>
     </div>
 
-    <div id="pane-watch" class="pane">
-      <div class="st-seg" id="st-wseg"><button data-kind="depth">Depth</button><button data-kind="color">Coloured</button><button data-kind="src">Source</button></div>
-      <video id="st-watch" controls playsinline muted loop></video>
-      <div id="st-wcolor" class="pane" hidden>
-        <canvas id="st-color"></canvas>
-        <div id="st-wlegend">
-          <canvas id="st-wlut" width="256" height="1"></canvas>
-          <div class="ramp-labels"><span>far</span><span>near</span></div>
+    <div class="st-layout">
+      <div class="st-left">
+        <div id="pane-watch" class="pane">
+          <div class="st-seg" id="st-wseg"><button data-kind="depth">Depth</button><button data-kind="color">Coloured</button><button data-kind="src">Source</button></div>
+          <video id="st-watch" controls playsinline muted loop></video>
+          <div id="st-wcolor" class="pane" hidden>
+            <canvas id="st-color"></canvas>
+            <div id="st-wlegend">
+              <canvas id="st-wlut" width="256" height="1"></canvas>
+              <div class="ramp-labels"><span>far</span><span>near</span></div>
+            </div>
+          </div>
         </div>
-        <button id="st-wexport">Save coloured video</button>
-        <p id="st-wexpmsg" class="msg"></p>
-        <div id="st-woptions"></div>
+
+        <div id="pane-3d" class="pane" hidden>
+          <div class="st-stage" id="st-stage3d"><canvas id="st-gl"></canvas><div class="st-markers" id="st-m3d"></div></div>
+          <div id="st-legend" hidden>
+            <canvas id="st-lut" width="256" height="1"></canvas>
+            <div class="ramp-labels"><span>far</span><span>near</span></div>
+          </div>
+          <p id="st-glmsg" class="msg bad" hidden></p>
+        </div>
+
+        <div id="pane-points" class="pane" hidden>
+          <div class="st-stage" id="st-stage2d"><canvas id="st-2d"></canvas><div class="st-markers" id="st-m2d"></div></div>
+        </div>
+
+        <div id="st-transport" class="st-transport" hidden>
+          <input id="st-scrub" type="range" min="0" max="1000" value="0" aria-label="Position in clip">
+          <div class="st-trow">
+            <button class="secondary small" id="st-prev" aria-label="Back one frame">‹ Frame</button>
+            <button class="small" id="st-play">Play</button>
+            <button class="secondary small" id="st-next" aria-label="Forward one frame">Frame ›</button>
+            <span class="when" id="st-time"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="st-right">
+        <div id="st-wcolor-opts" class="pane" hidden>
+          <button id="st-wexport">Save coloured video</button>
+          <p id="st-wexpmsg" class="msg"></p>
+          <div id="st-woptions"></div>
+        </div>
+
+        <div id="pane-3d-options" class="pane">
+          <p class="muted">Drag to rotate. Pinch to zoom. Two fingers to move.</p>
+          <div id="st-options"></div>
+        </div>
+
+        <div id="pane-points-list" class="pane">
+          <p class="muted">Tap the video to drop a point (up to 8). Each one shows how near that spot is on the current frame.</p>
+          <p class="muted" id="st-pempty">No points yet.</p>
+          <div id="st-plist"></div>
+          <button id="st-pplane" hidden>Make a cut plane from points 1, 2 and 3</button>
+          <p id="st-pmsg" class="msg"></p>
+          <button class="secondary" id="st-pclear" hidden>Remove all points</button>
+        </div>
+
+        <div id="pane-files" class="pane" hidden><div id="st-files" class="st-files"></div></div>
       </div>
     </div>
-
-    <div id="pane-3d" class="pane" hidden>
-      <div class="st-stage" id="st-stage3d"><canvas id="st-gl"></canvas><div class="st-markers" id="st-m3d"></div></div>
-      <div id="st-legend" hidden>
-        <canvas id="st-lut" width="256" height="1"></canvas>
-        <div class="ramp-labels"><span>far</span><span>near</span></div>
-      </div>
-      <p id="st-glmsg" class="msg bad" hidden></p>
-      <p class="muted">Drag to rotate. Pinch to zoom. Two fingers to move.</p>
-    </div>
-
-    <div id="pane-points" class="pane" hidden>
-      <div class="st-stage" id="st-stage2d"><canvas id="st-2d"></canvas><div class="st-markers" id="st-m2d"></div></div>
-      <p class="muted">Tap the video to drop a point (up to 8). Each one shows how near that spot is on the current frame.</p>
-    </div>
-
-    <div id="st-transport" class="st-transport" hidden>
-      <input id="st-scrub" type="range" min="0" max="1000" value="0" aria-label="Position in clip">
-      <div class="st-trow">
-        <button class="secondary small" id="st-prev" aria-label="Back one frame">‹ Frame</button>
-        <button class="small" id="st-play">Play</button>
-        <button class="secondary small" id="st-next" aria-label="Forward one frame">Frame ›</button>
-        <span class="when" id="st-time"></span>
-      </div>
-    </div>
-
-    <div id="pane-3d-options" class="pane"><div id="st-options"></div></div>
-
-    <div id="pane-points-list" class="pane">
-      <p class="muted" id="st-pempty">No points yet.</p>
-      <div id="st-plist"></div>
-      <button id="st-pplane" hidden>Make a cut plane from points 1, 2 and 3</button>
-      <p id="st-pmsg" class="msg"></p>
-      <button class="secondary" id="st-pclear" hidden>Remove all points</button>
-    </div>
-
-    <div id="pane-files" class="pane" hidden><div id="st-files" class="st-files"></div></div>
   </div>
   <video id="st-vd" class="st-hidden" playsinline muted></video>
   <video id="st-vs" class="st-hidden" playsinline muted></video>
