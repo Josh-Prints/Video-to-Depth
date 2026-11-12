@@ -1,1 +1,1 @@
-{"run_id": "43202768389", "started": 1794480218, "stage": "depth", "file": "kaggletest.mp4", "file_index": 1, "file_count": 1, "done": 2, "total": 2, "error": null, "updated": 1794480446, "note": "GPU unavailable, using the slower machine", "depth_started": 1794480226}
+{"run_id": "43202768389", "started": 1794480218, "stage": "saving", "file": "kaggletest.mp4", "file_index": 1, "file_count": 1, "done": 2, "total": 2, "error": null, "updated": 1794480448, "note": "GPU unavailable, using the slower machine", "depth_started": 1794480226}
