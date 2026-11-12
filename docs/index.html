@@ -646,7 +646,7 @@ a { color: var(--accent); }
     if (run.status === "in_progress") { pct = 3; stage = "Setting up the machine (about a minute)"; }
     if (p) {
       const many = p.file_count > 1 ? `Clip ${p.file_index} of ${p.file_count}. ` : "";
-      if (p.stage === "converting") { pct = 6; stage = many + "Converting the video"; }
+      if (p.stage === "converting") { pct = 6; stage = many + (p.note || "Converting the video"); }
       else if (p.stage === "depth") {
         const frac = p.total ? p.done / p.total : 0;
         pct = 8 + frac * 86;
@@ -657,6 +657,7 @@ a { color: var(--accent); }
           eta = left > 45 ? `about ${Math.ceil(left / 60)} min left` : "under a minute left";
         } else if (p.done === 0) { eta = "estimating time…"; }
       }
+      else if (p.stage === "gpu") { pct = 50; stage = many + "Running on a cloud GPU (best quality)"; eta = `${span(now - (p.gpu_started || now))} on GPU`; }
       else if (p.stage === "saving") { pct = 96; stage = many + "Saving the videos"; eta = "almost done"; }
       else if (p.stage === "done") { pct = 99; stage = "Publishing the result"; eta = "almost done"; }
       else if (p.stage === "failed") { pct = 99; stage = "Something went wrong. See Recent jobs."; }
