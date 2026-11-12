@@ -146,6 +146,13 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 28px; marg
 .st-toggle input { width: 22px; height: 22px; accent-color: var(--accent); }
 .st-toggle input[type=color] { width: 44px; height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; }
 #st-legend, #st-wlegend { display: grid; gap: 4px; }
+#st-merge { display: block; width: 100%; max-height: var(--stage-h, 42vh); object-fit: contain; border-radius: 8px; background: #000; }
+.st-cuts { display: grid; gap: 12px; }
+.st-cut { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.st-cuthead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.st-ptpick { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.st-ptpick select, #merge-bg { font: 15px var(--sans); padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); }
+#merge-bg { width: 100%; }
 #st-color { display: block; width: 100%; max-height: var(--stage-h, 42vh); object-fit: contain; border-radius: 8px; background: #000; }
 #st-woptions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 #st-lut, #st-wlut { display: block; width: 100%; height: 14px; border-radius: 4px; border: 1px solid var(--line); }
@@ -315,8 +322,9 @@ a { color: var(--accent); }
     <div class="st-layout">
       <div class="st-left">
         <div id="pane-watch" class="pane">
-          <div class="st-seg" id="st-wseg"><button data-kind="depth">Depth</button><button data-kind="color">Coloured</button><button data-kind="src">Source</button></div>
+          <div class="st-seg" id="st-wseg"><button data-kind="depth">Depth</button><button data-kind="color">Coloured</button><button data-kind="merged">Merged</button><button data-kind="src">Source</button></div>
           <video id="st-watch" controls playsinline muted loop></video>
+          <canvas id="st-merge" hidden></canvas>
           <div id="st-wcolor" class="pane" hidden>
             <canvas id="st-color"></canvas>
             <div id="st-wlegend">
@@ -351,6 +359,12 @@ a { color: var(--accent); }
       </div>
 
       <div class="st-right">
+        <div id="st-merge-opts" class="pane" hidden>
+          <div id="st-moptions"></div>
+          <p id="st-mmsg" class="msg"></p>
+          <p class="muted" id="st-mexport" hidden>To save the merged result, use Files → Merged video.</p>
+        </div>
+
         <div id="st-wcolor-opts" class="pane" hidden>
           <button id="st-wexport">Save coloured video</button>
           <p id="st-wexpmsg" class="msg"></p>
@@ -381,6 +395,7 @@ a { color: var(--accent); }
               <button data-kind="png">Transparent PNG frames (zip)</button>
               <button class="secondary" data-kind="webm">Transparent video (WebM)</button>
               <button class="secondary" data-kind="mask">Mask video (white = kept)</button>
+              <button class="secondary" data-kind="merged">Merged video (needs a background clip)</button>
             </div>
             <label class="st-toggle"><input type="checkbox" id="st-xhalf"><span>Half size (much smaller files)</span></label>
             <p id="st-xmsg" class="msg"></p>
@@ -391,6 +406,8 @@ a { color: var(--accent); }
     </div>
   </div>
   <canvas id="st-slice" class="st-hidden"></canvas>
+  <video id="st-vbd" class="st-hidden" playsinline muted></video>
+  <video id="st-vbs" class="st-hidden" playsinline muted></video>
   <video id="st-vd" class="st-hidden" playsinline muted></video>
   <video id="st-vs" class="st-hidden" playsinline muted></video>
 </div>
@@ -933,14 +950,17 @@ a { color: var(--accent); }
     b.querySelector(".clip-name").textContent = title;
     b.querySelector(".when").textContent = (g.png ? "Photo · " : "") + when;
     const file = (f) => f && { name: f.name, path: `output/${f.name}` };
-    b.onclick = () => Studio.open({ name: n, title, when, depth: file(g.depth), src: file(g.src), png: file(g.png), pngSrc: file(g.pngSrc), zip });
+    const c = { name: n, title, when, depth: file(g.depth), src: file(g.src), png: file(g.png), pngSrc: file(g.pngSrc), zip };
+    allClips.push(c);
+    b.onclick = () => Studio.open(c);
     return b;
   }
   function urlFor(path, file) {
     if (!previews.has(path)) previews.set(path, URL.createObjectURL(file));
     return previews.get(path);
   }
-  window.DP = { getFile, saveVideo, urlFor };
+  const allClips = [];
+  window.DP = { getFile, saveVideo, urlFor, get clips() { return allClips; } };
 
   let lastSig = null;
   async function loadResults() {
@@ -967,7 +987,7 @@ a { color: var(--accent); }
       if (sig === lastSig) return;
       lastSig = sig;
       if (!names.length) { el.innerHTML = '<p class="muted">Nothing yet. Finished depth videos show up here.</p>'; return; }
-      el.innerHTML = "";
+      el.innerHTML = ""; allClips.length = 0;
       names.forEach((n) => el.appendChild(resultRow(n, groups[n], zips[n])));
     } catch (e) {
       if (!token) return;
@@ -995,7 +1015,7 @@ a { color: var(--accent); }
   // ---------- version ----------
   // Bump APP_VERSION with each change to the site. The build line shows which commit Pages is serving,
   // so a stale cached page is easy to spot.
-  const APP_VERSION = "1.16";
+  const APP_VERSION = "1.17";
   $("version").textContent = `Depth Pass v${APP_VERSION}`;
   fetch(`${API}/commits/main`, { cache: "no-store", headers: token ? headers() : { Accept: "application/vnd.github+json" } })
     .then((r) => (r.ok ? r.json() : null))

@@ -81,53 +81,71 @@
   let grid = { n: 0, verts: 0, tri: 0, line: 0, vb: null, tb: null, lb: null };
   let M = new Float32Array(16);
 
+  // 3D surface. With edge smoothing on, the depth is blurred per vertex, which smooths the surface's
+  // outlines; cuts then test the surface's own (interpolated) depth, so a cut is a clean straight line
+  // across the surface instead of shredding on the stretched strips between near and far.
   const VS = `
-attribute vec2 a; uniform sampler2D D; uniform mat4 M; uniform float S, inv, ps; uniform vec2 asp;
+attribute vec2 a; uniform sampler2D D; uniform mat4 M; uniform float S, inv, ps, blurR; uniform vec2 asp, texel;
 varying vec2 v; varying float vd; varying vec3 vp;
-void main(){ float d = texture2D(D, a).r; if (inv > 0.5) d = 1.0 - d; vd = d; v = a;
+float dAt(vec2 uv) { float d = texture2D(D, uv).r; return inv > 0.5 ? 1.0 - d : d; }
+void main(){
+  float d = dAt(a);
+  if (blurR >= 0.25) {
+    float s = d, w = 1.0;
+    for (int i = 0; i < 12; i++) {
+      float outer = i < 6 ? 0.0 : 1.0, ang = float(i) * 1.0472 + outer * 0.5236, k = 1.0 - 0.4 * outer;
+      s += dAt(a + vec2(cos(ang), sin(ang)) * blurR * (0.5 + 0.5 * outer) * texel) * k; w += k;
+    }
+    d = s / w;
+  }
+  vd = d; v = a;
   vp = vec3((a.x - 0.5) * asp.x, (0.5 - a.y) * asp.y, (d - 0.5) * S);
   gl_Position = M * vec4(vp, 1.0); gl_PointSize = ps; }`;
   // Edges fade over about one screen pixel (fwidth) instead of a hard keep/throw-away per pixel; with
   // alpha-to-coverage on, the GPU turns that fade into smooth multisampled edges without sorting.
   const AA = (d) => d ? "#extension GL_OES_standard_derivatives : enable\n#define FW(x) max(fwidth(x), 1e-5)\n" : "#define FW(x) 1e-5\n";
-  // Depth as seen by the cut tests: blurred over a small disk (edgeBlur, in depth-map pixels) so outlines
-  // follow smooth curves instead of the depth map's steps, plus the depth range inside the disk, which
-  // marks a jump between near and far (a silhouette). keep() fades over (0.75 + soft) screen pixels.
-  const EDGE_GLSL = `
-uniform sampler2D D; uniform vec2 texel; uniform float blurR, invF, soft;
-float dAt(vec2 uv) { float d = texture2D(D, uv).r; return invF > 0.5 ? 1.0 - d : d; }
-vec2 blurDepth(vec2 uv) {
-  float c = dAt(uv);
-  if (blurR < 0.25) return vec2(c, 0.0);
-  float s = c, w = 1.0, mn = c, mx = c;
-  for (int i = 0; i < 12; i++) {
-    float outer = i < 6 ? 0.0 : 1.0;
-    float ang = float(i) * 1.0472 + outer * 0.5236;
-    vec2 o = vec2(cos(ang), sin(ang)) * blurR * (0.5 + 0.5 * outer) * texel;
-    float d = dAt(uv + o), k = 1.0 - 0.4 * outer;
-    s += d * k; w += k; mn = min(mn, d); mx = max(mx, d);
+  // Up to 4 cuts. ck: 0 none, 1 one distance, 2 plane. cm: 1 hide behind, 2 hide in front, 3 outline.
+  // dd is the depth in "cut space" (the background's depth scale when a background clip is merged).
+  const CUT_GLSL = `
+uniform int ck[4]; uniform int cm[4]; uniform float cv[4]; uniform vec4 cp[4]; uniform float soft, mA, mB;
+float keep(float x) { float w = FW(x) * (0.75 + soft); return smoothstep(-w, w, x); }
+float outline = 0.0;
+float applyCuts(float dd, vec2 xy, float sc) {
+  float a = 1.0;
+  for (int i = 0; i < 4; i++) {
+    if (ck[i] == 0) continue;
+    float x = ck[i] == 1 ? dd - cv[i] : dot(cp[i].xyz, vec3(xy, (dd - 0.5) * sc)) + cp[i].w;
+    if (cm[i] == 1) a *= keep(x);
+    else if (cm[i] == 2) a *= keep(-x);
+    else if (cm[i] == 3) { float b = ck[i] == 1 ? 0.012 : 0.006, f = FW(x); outline = max(outline, 1.0 - smoothstep(b - f, b + f, abs(x))); }
   }
-  return vec2(s / w, mx - mn);
-}
-float keep(float x) { float w = FW(x) * (0.75 + soft); return smoothstep(-w, w, x); }`;
-  const FS = (d) => `${AA(d)}precision mediump float;${EDGE_GLSL}
+  return a;
+}`;
+  // Blurred depth for the flat renderers (export, preview, merge): a 13-tap disk in depth-map pixels.
+  const BLUR_GLSL = `
+uniform sampler2D D; uniform vec2 texel; uniform float blurR, invF;
+float dAt(sampler2D t, vec2 uv) { float d = texture2D(t, uv).r; return invF > 0.5 ? 1.0 - d : d; }
+float blurDepth(sampler2D t, vec2 uv) {
+  float c = dAt(t, uv);
+  if (blurR < 0.25) return c;
+  float s = c, w = 1.0;
+  for (int i = 0; i < 12; i++) {
+    float outer = i < 6 ? 0.0 : 1.0, ang = float(i) * 1.0472 + outer * 0.5236, k = 1.0 - 0.4 * outer;
+    s += dAt(t, uv + vec2(cos(ang), sin(ang)) * blurR * (0.5 + 0.5 * outer) * texel) * k; w += k;
+  }
+  return s / w;
+}`;
+  const FS = (d) => `${AA(d)}precision mediump float;${CUT_GLSL}
 uniform float SF;
-uniform sampler2D C, L; uniform int mode, cutMode, hideOut, planeMode;
-uniform float cut, edge, bright, dmix, lo, hi, lines, lineW, hlOn, hlPos, hlW; uniform vec3 lineCol, hlCol; uniform vec4 plane;
+uniform sampler2D C, L; uniform int mode, hideOut;
+uniform float edge, bright, dmix, lo, hi, lines, lineW, hlOn, hlPos, hlW; uniform vec3 lineCol, hlCol;
 varying vec2 v; varying float vd; varying vec3 vp;
 void main(){
-  float a = 1.0;
-  vec2 bd = blurDepth(v);
-  float cd = blurR < 0.25 ? vd : bd.x;                 // depth used by the cuts
-  float pd = dot(plane.xyz, vec3(vp.xy, (cd - 0.5) * SF)) + plane.w;   // > 0: in front of the 3-point plane
-  if (planeMode == 1) a *= keep(pd);
-  if (planeMode == 2) a *= keep(-pd);
-  if (cutMode == 1) a *= keep(cd - cut);
-  if (cutMode == 2) a *= keep(cut - cd);
+  float a = applyCuts(mA * vd + mB, vp.xy, SF);
   ${d ? "if (edge > 0.0) a *= 1.0 - smoothstep(edge * 0.75, edge * 1.35, fwidth(vd));   // stretched mesh: never feathered" : ""}
   vec3 c = texture2D(C, v).rgb;
   if (mode == 1) {
-    if (hideOut == 1) a *= keep(cd - lo) * keep(hi - cd);
+    if (hideOut == 1) a *= keep(vd - lo) * keep(hi - vd);
     c = mix(c, texture2D(L, vec2(vd, 0.5)).rgb, dmix);
     float u = (vd - lo) / max(hi - lo, 0.001);
     if (lines > 0.0 && u > 0.0 && u < 1.0) {
@@ -137,8 +155,7 @@ void main(){
     if (hlOn > 0.5) { float fw = FW(vd); c = mix(c, hlCol, 0.85 * (1.0 - smoothstep(hlW - fw, hlW + fw, abs(vd - hlPos)))); }
   }
   c *= bright;
-  if (cutMode == 3) { float fw = FW(cd); c = mix(c, vec3(0.2, 0.55, 1.0), 0.85 * (1.0 - smoothstep(0.012 - fw, 0.012 + fw, abs(cd - cut)))); }
-  if (planeMode == 3) { float fw = FW(pd); c = mix(c, vec3(0.2, 0.55, 1.0), 0.85 * (1.0 - smoothstep(0.006 - fw, 0.006 + fw, abs(pd)))); }
+  c = mix(c, vec3(0.2, 0.55, 1.0), 0.85 * outline);
   if (a < 0.02) discard;
   gl_FragColor = vec4(c, a); }`;
 
@@ -154,7 +171,8 @@ void main(){
     gl.bindAttribLocation(prog, 0, "a"); gl.linkProgram(prog);
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
     gl.useProgram(prog);
-    for (const n of ["D", "C", "L", "M", "S", "inv", "ps", "asp", "mode", "cutMode", "cut", "edge", "bright", "hideOut", "dmix", "lo", "hi", "lines", "lineW", "hlOn", "hlPos", "hlW", "lineCol", "hlCol", "plane", "planeMode", "texel", "blurR", "invF", "soft", "SF"]) U[n] = gl.getUniformLocation(prog, n);
+    for (const n of ["D", "C", "L", "M", "S", "inv", "ps", "asp", "edge", "bright", "hideOut", "dmix", "lo", "hi", "lines", "lineW", "hlOn", "hlPos", "hlW", "lineCol", "hlCol", "texel", "blurR", "soft", "SF", "mA", "mB", "mode"]) U[n] = gl.getUniformLocation(prog, n);
+    for (const n of ["ck", "cm", "cv", "cp"]) U[n] = gl.getUniformLocation(prog, n + "[0]");
     const tex = (unit) => { const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
@@ -237,15 +255,10 @@ void main(){
     gl.uniform1f(U.dmix, opt.dMix / 100); gl.uniform1f(U.lo, lo); gl.uniform1f(U.hi, hi);
     gl.uniform1f(U.lines, opt.lines); gl.uniform1f(U.lineW, opt.lineW / 100); gl.uniform3fv(U.lineCol, col(opt.lineCol));
     gl.uniform1f(U.hlOn, opt.hl ? 1 : 0); gl.uniform1f(U.hlPos, opt.hlPos / 100); gl.uniform1f(U.hlW, opt.hlWidth / 200); gl.uniform3fv(U.hlCol, col(opt.hlCol));
-    const modeIx = ["off", "behind", "front", "outline"].indexOf(opt.cutMode), pl = planeEq();
-    gl.uniform1i(U.cutMode, opt.cutType === "depth" ? modeIx : 0);
-    gl.uniform1i(U.planeMode, opt.cutType === "plane" && pl ? modeIx : 0);
-    gl.uniform4fv(U.plane, pl || [0, 0, 0, 0]);
-    gl.uniform1f(U.cut, opt.cut / 100);
+    setCutUniforms(gl, U, opt.edgeSoft);
     gl.uniform1f(U.edge, opt.style === "mesh" && opt.edge > 0 ? 0.15 * Math.pow(0.03, opt.edge / 100) : 0);
     gl.uniform2f(U.texel, 1 / (vD.videoWidth || 1280), 1 / (vD.videoHeight || 720));
-    gl.uniform1f(U.blurR, opt.edgeBlur); gl.uniform1f(U.soft, opt.edgeSoft);
-    gl.uniform1f(U.invF, opt.invert ? 1 : 0); gl.uniform1f(U.SF, opt.strength);
+    gl.uniform1f(U.blurR, opt.edgeBlur); gl.uniform1f(U.SF, opt.strength);
     gl.uniform1f(U.bright, opt.bright);
     gl.bindBuffer(gl.ARRAY_BUFFER, grid.vb); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
     if (opt.style === "points") gl.drawArrays(gl.POINTS, 0, grid.verts);
@@ -268,48 +281,193 @@ void main(){
   }
   window.addEventListener("resize", () => { if (open) fitStages(); });
 
-  // ---------- 3-point cut plane ----------
-  let planePts = null;                       // [{u, v, d}] x3, depths locked when the plane was made
-  const savePlane = () => clip && store.set("depthpass-plane:" + clip.name, planePts);
-  /** Plane through the 3 locked points in the 3D view's space, as [nx, ny, nz, w]; normal faces the camera. */
-  function planeEq() {
-    if (!planePts) return null;
-    const a = aspVec(), P = planePts.map((p) => { const d = opt.invert ? 1 - p.d : p.d; return [(p.u - 0.5) * a[0], (0.5 - p.v) * a[1], (d - 0.5) * opt.strength]; });
+  // ---------- background clip (merge) ----------
+  // Another clip used as the background: the foreground shows only where it is nearer than the
+  // background. The two depth maps have their own scales, so the foreground's depth is mapped into the
+  // background's scale with depth = a * foreground + b (Auto-match fits a and b). Cuts and points then
+  // work in the background's depth scale.
+  const vBD = $("st-vbd"), vBS = $("st-vbs");
+  let merge = null;                            // {bg: clip name, a, b, bias} for the open clip
+  let bgClip = null, bgReady = false;
+  const bgOn = () => !!(merge && merge.bg && bgReady);
+  const mergeMap = () => (bgOn() ? [merge.a, merge.b] : [1, 0]);
+  const saveMerge = () => clip && store.set("depthpass-merge:" + clip.name, merge);
+  async function loadBg(name) {
+    bgReady = false; bgClip = null;
+    for (const v of [vBD, vBS]) { v.pause(); v.removeAttribute("src"); v.load(); }
+    if (!name) return;
+    const c = (DP.clips || []).find((x) => x.name === name);
+    if (!c) throw new Error("That background clip is no longer in your clips.");
+    const [fd, fs] = await Promise.all([DP.getFile(c.depth.path, c.depth.name), c.src ? DP.getFile(c.src.path, c.src.name) : null]);
+    const ready = (v, u) => new Promise((res, rej) => { v.onloadeddata = res; v.onerror = () => rej(new Error("Couldn't play the background clip.")); v.src = u; v.load(); });
+    await Promise.all([ready(vBD, DP.urlFor(c.depth.path, fd)), ready(vBS, fs ? DP.urlFor(c.src.path, fs) : DP.urlFor(c.depth.path, fd))]);
+    vBD.loop = vBS.loop = true;
+    // A just-loaded video can report data before its first frame can be drawn: seek once and wait.
+    const t = (master.currentTime || 0) % Math.max(0.05, vBD.duration || 1) + 0.001;
+    await Promise.all([vBD, vBS].map((v) => new Promise((res) => { const done = () => { v.removeEventListener("seeked", done); res(); }; v.addEventListener("seeked", done); v.currentTime = t; setTimeout(done, 3000); })));
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    bgClip = c; bgReady = true;
+  }
+  /** Keep the background clip in step with the foreground (looping if it is shorter). */
+  function syncBg() {
+    if (!bgOn()) return;
+    const t = (master.currentTime || 0) % Math.max(0.05, vBD.duration || 1);
+    for (const v of [vBD, vBS]) if (Math.abs(v.currentTime - t) > 0.12) v.currentTime = t;
+    if (playing()) { for (const v of [vBD, vBS]) if (v.paused) v.play().catch(() => {}); }
+    else for (const v of [vBD, vBS]) if (!v.paused) v.pause();
+  }
+  /** Fit a and b so the foreground's depth matches the background's, ignoring where they differ (the hand). */
+  function autoMatch() {
+    const W = 96, H = Math.max(2, Math.round(96 / aspect)), c = document.createElement("canvas"); c.width = W; c.height = H;
+    const x = c.getContext("2d", { willReadFrequently: true });
+    const grab = (v) => { x.drawImage(v, 0, 0, W, H); const d = x.getImageData(0, 0, W, H).data, o = new Float32Array(W * H); for (let i = 0; i < o.length; i++) o[i] = disp(d[i * 4] / 255); return o; };
+    const f = grab(vD), g = grab(vBD);
+    const spread = (o) => { let mn = 1, mx = 0; for (const x of o) { mn = Math.min(mn, x); mx = Math.max(mx, x); } return mx - mn; };
+    if (spread(f) < 0.02 || spread(g) < 0.02) return false;     // a blank frame: nothing to fit
+    let idx = [...f.keys()], a = 1, b = 0;
+    for (let it = 0; it < 4; it++) {                    // least squares, then drop the worst 30% and refit
+      let sf = 0, sg = 0, sff = 0, sfg = 0;
+      for (const i of idx) { sf += f[i]; sg += g[i]; sff += f[i] * f[i]; sfg += f[i] * g[i]; }
+      const n = idx.length, den = n * sff - sf * sf;
+      if (Math.abs(den) < 1e-9) break;
+      a = (n * sfg - sf * sg) / den; b = (sg - a * sf) / n;
+      idx.sort((i, j) => Math.abs(a * f[i] + b - g[i]) - Math.abs(a * f[j] + b - g[j]));
+      idx = idx.slice(0, Math.max(50, Math.floor(idx.length * 0.7)));
+    }
+    merge.a = Math.round(Math.max(0.05, Math.min(5, a)) * 1000) / 1000;
+    merge.b = Math.round(Math.max(-2, Math.min(2, b)) * 1000) / 1000;
+    saveMerge(); clearExports();
+    return true;
+  }
+
+  // ---------- cuts ----------
+  // Up to 4 cuts per clip, all applied at once (a pixel is hidden if any cut hides it).
+  // {kind: "depth"|"plane", mode: "behind"|"front"|"outline"|"off", val: 0-100, pts: [i, j, k], off: nudge}
+  const MAX_CUTS = 4, MODES = ["off", "behind", "front", "outline"];
+  let cuts = [];
+  const saveCuts = () => clip && store.set("depthpass-cuts:" + clip.name, cuts);
+  function loadCuts(name) {
+    cuts = store.get("depthpass-cuts:" + name, null);
+    if (cuts) return;
+    cuts = [];                                    // carry over the single cut from the earlier version
+    if (["behind", "front", "outline"].includes(opt.cutMode)) {
+      if (opt.cutType === "plane" && store.get("depthpass-plane:" + name, null)) cuts.push({ kind: "plane", mode: opt.cutMode, val: 50, pts: [0, 1, 2], off: opt.planeOff || 0 });
+      else if (opt.cutType !== "plane") cuts.push({ kind: "depth", mode: opt.cutMode, val: opt.cut, pts: [0, 1, 2], off: 4 });
+    }
+  }
+  /** Depth used by cuts and points, after "Flip near and far". */
+  const disp = (d) => (opt.invert ? 1 - d : d);
+  /** Plane through 3 points in the 3D view's space, as [nx, ny, nz, w]; normal faces the camera. */
+  function planeFrom(pts, off) {
+    const ps = pts.map((i) => points[i]);
+    if (ps.some((p) => !p || eff(p) == null) || new Set(pts).size < 3) return null;
+    const a = aspVec(), P = ps.map((p) => [(p.u - 0.5) * a[0], (0.5 - p.v) * a[1], (disp(eff(p)) - 0.5) * opt.strength]);
     const e1 = [0, 1, 2].map((k) => P[1][k] - P[0][k]), e2 = [0, 1, 2].map((k) => P[2][k] - P[0][k]);
     let n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
     const len = Math.hypot(...n);
     if (len < 1e-6) return null;                          // the 3 points are in a line
     n = n.map((x) => x / len * (n[2] < 0 ? -1 : 1));
-    return [n[0], n[1], n[2], -(n[0] * P[0][0] + n[1] * P[0][1] + n[2] * P[0][2]) - opt.planeOff / 200];
+    return [n[0], n[1], n[2], -(n[0] * P[0][0] + n[1] * P[0][1] + n[2] * P[0][2]) - off / 200];
   }
-  /** Rebuild the plane from points 1-3 (their hand-set depths) whenever one of them changes. */
-  function syncPlane() {
-    if (!planePts) return;
-    const pts = points.slice(0, 3);
-    if (pts.length < 3 || pts.some((p) => eff(p) == null)) return;
-    const prev = planePts;
-    planePts = pts.map((p) => ({ u: p.u, v: p.v, d: eff(p) }));
-    if (!planeEq()) { planePts = prev; $("st-pmsg").className = "msg bad"; $("st-pmsg").textContent = "Points 1, 2 and 3 are in a straight line, so the plane wasn't changed."; return; }
-    savePlane(); clearExports();
+  /** The cuts as shader uniforms; inactive or broken cuts are skipped. */
+  function cutArrays() {
+    const ck = new Int32Array(4), cm = new Int32Array(4), cv = new Float32Array(4), cp = new Float32Array(16);
+    let active = 0;
+    cuts.slice(0, MAX_CUTS).forEach((c, i) => {
+      const m = MODES.indexOf(c.mode);
+      if (m <= 0) return;
+      if (c.kind === "plane") { const pl = planeFrom(c.pts, c.off); if (!pl) return; ck[i] = 2; cp.set(pl, i * 4); }
+      else { ck[i] = 1; cv[i] = c.val / 100; }
+      cm[i] = m; if (m === 1 || m === 2) active++;
+    });
+    return { ck, cm, cv, cp, active };
   }
-  function makePlane() {
-    const pts = points.slice(0, 3);
-    if (pts.length < 3 || pts.some((p) => eff(p) == null)) return;
-    pts.forEach((p) => { if (p.m == null) p.m = p.d; });      // lock depths so a hand passing later can't move the plane
-    planePts = pts.map((p) => ({ u: p.u, v: p.v, d: eff(p) }));
-    if (!planeEq()) { planePts = null; $("st-pmsg").className = "msg bad"; $("st-pmsg").textContent = "Points 1, 2 and 3 are in a straight line. Spread them out into a triangle."; return; }
-    savePoints(); savePlane();
-    opt.cutType = "plane"; if (opt.cutMode === "off") opt.cutMode = "behind"; opt.planeOff = 4; saveOpt();
-    openGroups.add("Cut plane");
+  function setCutUniforms(g, u, soft) {
+    const c = cutArrays();
+    g.uniform1iv(u.ck, c.ck); g.uniform1iv(u.cm, c.cm); g.uniform1fv(u.cv, c.cv); g.uniform4fv(u.cp, c.cp);
+    g.uniform1f(u.soft, soft);
+    const mp = mergeMap();
+    g.uniform1f(u.mA, mp[0]); g.uniform1f(u.mB, mp[1]);
+    return c;
+  }
+  /** Lock the depths of a plane's points so a hand passing later can't move it. */
+  const lockPts = (pts) => pts.forEach((i) => { const p = points[i]; if (p && p.m == null && p.d != null) p.m = p.d; });
+  function addPlaneCut() {
+    const n = points.length;
+    if (n < 3) return;
+    if (cuts.length >= MAX_CUTS) { $("st-pmsg").className = "msg bad"; $("st-pmsg").textContent = `You can have up to ${MAX_CUTS} cuts. Remove one first.`; return; }
+    const pts = [n - 3, n - 2, n - 1];
+    lockPts(pts);
+    if (!planeFrom(pts, 0)) { $("st-pmsg").className = "msg bad"; $("st-pmsg").textContent = `Points ${n - 2}, ${n - 1} and ${n} are in a straight line. Spread them out into a triangle.`; return; }
+    cuts.push({ kind: "plane", mode: "behind", val: 50, pts, off: 4 });
+    savePoints(); onCutsChanged();
+    openGroups.add("Cuts");
     setTab("3d");
+  }
+  function onCutsChanged() { saveCuts(); clearExports(); }
+  /** When a point is removed, fix up the cuts that refer to points by number. */
+  function pointRemoved(i) {
+    const before = cuts.length;
+    cuts = cuts.filter((c) => c.kind !== "plane" || !c.pts.includes(i));
+    cuts.forEach((c) => { c.pts = c.pts.map((k) => (k > i ? k - 1 : k)); });
+    if (cuts.length < before) { $("st-pmsg").className = "msg"; $("st-pmsg").textContent = "A plane cut that used this point was removed."; }
+    onCutsChanged();
+  }
+  /** Editable list of cuts, used by the 3D options and the Points cut preview. */
+  function cutsUI() {
+    const box = el("div", "st-cuts");
+    if (!cuts.length) box.appendChild(el("p", "muted", "No cuts yet. Add one below, or in Points put 3 dots on the wall and tap Add a plane cut."));
+    const seg = (choices, cur, onPick) => {
+      const sg = el("div", "st-seg");
+      for (const [val, text] of choices) { const b = el("button", null, text); b.setAttribute("aria-pressed", String(cur === val)); b.onclick = () => onPick(val); sg.appendChild(b); }
+      return sg;
+    };
+    const range = (label, min, max, step, val, onInput, id) => {
+      const f = el("div", "st-field"), head = el("div", "st-rhead"), v = el("span", "st-rval", String(val));
+      const lab = el("label", "st-label", label); lab.htmlFor = id;
+      const r = el("input"); r.type = "range"; r.min = min; r.max = max; r.step = step; r.value = val; r.id = id;
+      r.oninput = () => { v.textContent = r.value; onInput(+r.value); };
+      head.append(lab, v); f.append(head, r); return f;
+    };
+    cuts.forEach((c, i) => {
+      const card = el("div", "st-cut");
+      const head = el("div", "st-cuthead"); head.appendChild(el("strong", null, `Cut ${i + 1}`));
+      const rm = el("button", "secondary small", "Remove"); rm.onclick = () => { cuts.splice(i, 1); onCutsChanged(); buildOptions(); };
+      head.appendChild(rm); card.appendChild(head);
+      card.appendChild(seg([["depth", "One distance"], ["plane", "Plane (3 points)"]], c.kind, (k) => { c.kind = k; if (k === "plane") lockPts(c.pts); onCutsChanged(); buildOptions(); }));
+      card.appendChild(seg([["behind", "Hide behind"], ["front", "Hide in front"], ["outline", "Outline"], ["off", "Off"]], c.mode, (m) => { c.mode = m; onCutsChanged(); buildOptions(); }));
+      if (c.kind === "depth") card.appendChild(range("Position (far to near)", 0, 100, 0.5, c.val, (x) => { c.val = x; onCutsChanged(); }, `cut-${i}-val`));
+      else {
+        const pick = el("div", "st-ptpick");
+        pick.appendChild(el("span", "st-label", "Points"));
+        for (let k = 0; k < 3; k++) {
+          const s = el("select"); s.setAttribute("aria-label", `Plane point ${k + 1}`);
+          points.forEach((_, n) => { const o = el("option", null, String(n + 1)); o.value = n; s.appendChild(o); });
+          s.value = c.pts[k];
+          s.onchange = () => { c.pts[k] = +s.value; lockPts(c.pts); onCutsChanged(); buildOptions(); };
+          pick.appendChild(s);
+        }
+        card.appendChild(pick);
+        if (!planeFrom(c.pts, 0)) card.appendChild(el("p", "msg bad", points.length < 3 ? "Add at least 3 points in the Points tab." : "Pick 3 different points that aren't in a line."));
+        card.appendChild(range("Nudge (back to front)", -40, 40, 0.5, c.off, (x) => { c.off = x; onCutsChanged(); }, `cut-${i}-off`));
+      }
+      box.appendChild(card);
+    });
+    if (cuts.length < MAX_CUTS) {
+      const add = el("button", "secondary", "Add a cut");
+      add.onclick = () => { cuts.push({ kind: points.length >= 3 ? "plane" : "depth", mode: "behind", val: 50, pts: points.length >= 3 ? [points.length - 3, points.length - 2, points.length - 1] : [0, 1, 2], off: 4 }); lockPts(cuts[cuts.length - 1].pts); onCutsChanged(); buildOptions(); };
+      box.appendChild(add);
+    }
+    return box;
   }
 
   // ---------- depth sampling for points ----------
   const samp = document.createElement("canvas"); samp.width = 320; samp.height = 180;
   const sctx = samp.getContext("2d", { willReadFrequently: true });
   function sampleDepths() {
-    if (!points.length || vD.readyState < 2) return;
-    sctx.drawImage(vD, 0, 0, samp.width, samp.height);
+    const src = bgOn() ? vBD : vD;
+    if (!points.length || src.readyState < 2) return;
+    sctx.drawImage(src, 0, 0, samp.width, samp.height);
     for (const p of points) {
       const x = Math.min(samp.width - 1, Math.floor(p.u * samp.width)), y = Math.min(samp.height - 1, Math.floor(p.v * samp.height));
       p.d = sctx.getImageData(x, y, 1, 1).data[0] / 255;
@@ -331,7 +489,7 @@ void main(){
   function project3D(p) {
     const e = eff(p);
     if (e == null) return null;
-    const a = aspVec(), d = opt.invert ? 1 - e : e;
+    const mp = mergeMap(), a = aspVec(), d = (disp(e) - mp[1]) / (mp[0] || 1);   // back to the clip's own depth scale
     const x = (p.u - 0.5) * a[0], y = (0.5 - p.v) * a[1], z = (d - 0.5) * opt.strength;
     const cx = M[0] * x + M[4] * y + M[8] * z + M[12], cy = M[1] * x + M[5] * y + M[9] * z + M[13], cw = M[3] * x + M[7] * y + M[11] * z + M[15];
     if (cw <= 0) return null;
@@ -343,35 +501,35 @@ void main(){
   let checker = null;
   function draw2D() {
     sizeCanvas(p2);
-    const v = hasSrc ? vS : vD;
+    const v = bgOn() ? vBS : hasSrc ? vS : vD;
     if (v.readyState < 2) return;
-    if (opt.pPreview && sliceSettings() && !sliceRec && initSliceGL()) {
-      const W = p2.width, H = p2.height;
+    const W = p2.width, H = p2.height;
+    if (opt.pPreview && (cutArrays().active || bgOn()) && !sliceRec && initSliceGL()) {
+      const scale = Math.min(1, W / (vD.videoWidth || W));
+      if (bgOn()) { drawSlice(2, scale); p2ctx.drawImage(scv, 0, 0, W, H); return; }   // merged result
       if (opt.pHidden === "checker") {
         if (!checker) { const c = document.createElement("canvas"); c.width = c.height = 24; const x = c.getContext("2d");
           x.fillStyle = "#666"; x.fillRect(0, 0, 24, 24); x.fillStyle = "#999"; x.fillRect(0, 0, 12, 12); x.fillRect(12, 12, 12, 12); checker = p2ctx.createPattern(c, "repeat"); }
         p2ctx.fillStyle = checker; p2ctx.fillRect(0, 0, W, H);
       } else {
         p2ctx.fillStyle = "#000"; p2ctx.fillRect(0, 0, W, H);
-        if (opt.pHidden === "dim") { p2ctx.globalAlpha = 0.25; p2ctx.drawImage(v, 0, 0, W, H); p2ctx.globalAlpha = 1; }
+        if (opt.pHidden === "dim") { p2ctx.globalAlpha = 0.25; p2ctx.drawImage(hasSrc ? vS : vD, 0, 0, W, H); p2ctx.globalAlpha = 1; }
       }
-      drawSlice(0, Math.min(1, W / (vD.videoWidth || W)));
+      drawSlice(0, scale);
       p2ctx.drawImage(scv, 0, 0, W, H);
     } else {
-      p2ctx.drawImage(v, 0, 0, p2.width, p2.height);
+      p2ctx.drawImage(v, 0, 0, W, H);
     }
   }
   const pointGroups = () => [
     ["Cut preview", [
-      ["toggle", "pPreview", "Show the cut on this view"],
+      ...(bgOn() ? [["note", `Points sit on the background clip (${bgClip.title}) and read its depth.`]] : []),
+      ["toggle", "pPreview", bgOn() ? "Show the merged result on this view" : "Show the cuts on this view"],
       ...(!opt.pPreview ? [] : [
-        ["seg", "cutType", "Cut by", [["depth", "One distance"], ["plane", "3-point plane"]]],
-        ...(opt.cutType === "plane" && !planePts ? [["note", "No plane yet. Add 3 points on the wall and tap Make a cut plane below."]] : []),
-        ["seg", "cutMode", "Remove", [["off", "Nothing"], ["behind", "Behind"], ["front", "In front"]]],
-        opt.cutType === "plane" ? ["range", "planeOff", "Nudge the plane (back to front)", -40, 40, 1] : ["range", "cut", "Position (far to near)", 0, 100, 1],
+        ["custom", cutsUI],
         ["range", "edgeBlur", "Edge smoothing", 0, 8, 0.5],
         ["range", "edgeSoft", "Edge softness", 0, 8, 0.5],
-        ["seg", "pHidden", "Show removed parts as", [["checker", "Checkerboard"], ["dim", "Dimmed"], ["black", "Black"]]],
+        ...(bgOn() ? [] : [["seg", "pHidden", "Show removed parts as", [["checker", "Checkerboard"], ["dim", "Dimmed"], ["black", "Black"]]]]),
       ]),
     ]],
   ];
@@ -384,7 +542,8 @@ void main(){
     const list = $("st-plist"); list.innerHTML = "";
     $("st-pempty").hidden = points.length > 0;
     $("st-pclear").hidden = points.length === 0;
-    $("st-pplane").hidden = points.length < 3 || !!planePts; $("st-pmsg").textContent = "";
+    $("st-pplane").hidden = points.length < 3;
+    $("st-pplane").textContent = points.length >= 3 ? `Add a plane cut through points ${points.length - 2}, ${points.length - 1} and ${points.length}` : "";
     points.forEach((p, i) => {
       const row = el("div", "st-prow" + (i === selected ? " sel" : ""));
       const dot = el("span", "st-dot static", i + 1); dot.style.background = COLORS[i % COLORS.length];
@@ -393,9 +552,13 @@ void main(){
       const bar = el("div", "bar"); bar.appendChild(el("i")); bar.firstChild.dataset.i = i;
       mid.append(val, bar);
       const cut = el("button", "secondary small", "Cut here");
-      cut.onclick = () => { if (eff(p) == null) return; opt.cutType = "depth"; opt.cut = Math.round(eff(p) * 100); if (opt.cutMode === "off") opt.cutMode = "behind"; saveOpt(); buildOptions(); setTab("3d"); };
+      cut.onclick = () => {
+        if (eff(p) == null || cuts.length >= MAX_CUTS) return;
+        cuts.push({ kind: "depth", mode: "behind", val: Math.round(disp(eff(p)) * 1000) / 10, pts: [0, 1, 2], off: 4 });
+        onCutsChanged(); openGroups.add("Cuts"); setTab("3d");
+      };
       const rm = el("button", "secondary small", "Remove");
-      rm.onclick = () => { points.splice(i, 1); selected = -1; savePoints(); if (planePts && i < 3) syncPlane(); renderPointList(); };
+      rm.onclick = () => { points.splice(i, 1); selected = -1; savePoints(); pointRemoved(i); renderPointList(); buildPointOptions(); };
       const adj = el("button", "secondary small", i === selected ? "Done" : "Adjust");
       adj.onclick = () => { selected = i === selected ? -1 : i; renderPointList(); };
       const btns = el("div", "st-pbtns"); btns.append(adj, cut, rm);
@@ -408,7 +571,7 @@ void main(){
   /** Sliders for one point: left-right, up-down, and depth (set by hand, or read from the video). */
   function adjustPanel(p, i) {
     const box = el("div", "st-padj");
-    const changed = () => { savePoints(); if (planePts && i < 3) syncPlane(); updatePointValues(); };
+    const changed = () => { savePoints(); clearExports(); updatePointValues(); };
     const slider = (label, get, set, id) => {
       const f = el("div", "st-field"), head = el("div", "st-rhead"), v = el("span", "st-rval");
       const lab = el("label", "st-label", label); lab.htmlFor = id;
@@ -423,7 +586,8 @@ void main(){
     const sy = slider("Up ↕ down", () => p.v, (x) => { p.v = x; p.d = null; }, `padj-y-${i}`);
     const sd = slider("Far ↔ near (depth)", () => eff(p), (x) => { p.m = x; }, `padj-d-${i}`);
     const reset = el("button", "secondary small", "Use video depth here");
-    reset.onclick = () => { if (p.d == null) return; p.m = planePts && i < 3 ? p.d : null; sd.refresh(); changed(); };
+    const inPlane = () => cuts.some((c) => c.kind === "plane" && c.pts.includes(i));
+    reset.onclick = () => { if (p.d == null) return; p.m = inPlane() ? p.d : null; sd.refresh(); changed(); };
     box.append(sx, sy, sd, reset);
     return box;
   }
@@ -460,18 +624,18 @@ void main(){
       const i = dragging; dragging = -1;
       if (moved) {
         savePoints(); renderPointList();
-        if (planePts && i < 3) setTimeout(() => { points[i].m = points[i].d; savePoints(); syncPlane(); renderPointList(); }, 120);   // read the new spot's depth first
+        if (cuts.some((c) => c.kind === "plane" && c.pts.includes(i))) setTimeout(() => { points[i].m = points[i].d; savePoints(); clearExports(); renderPointList(); }, 120);   // read the new spot's depth first
       }
       return;
     }
     if (!tapStart || Math.hypot(e.clientX - tapStart[0], e.clientY - tapStart[1]) > 8) return;
     const [u, v] = at(e);
-    if (points.length < 8) { points.push({ u, v, d: null }); selected = points.length - 1; savePoints(); }
-    renderPointList();
+    if (points.length < 8) { points.push({ u, v, d: null, m: null }); selected = points.length - 1; savePoints(); }
+    renderPointList(); buildPointOptions();
   };
   p2.addEventListener("pointerup", endDrag);
   p2.addEventListener("pointercancel", () => { dragging = -1; });
-  $("st-pplane").onclick = makePlane;
+  $("st-pplane").onclick = addPlaneCut;
   $("st-pclear").onclick = () => { points = []; selected = -1; savePoints(); renderPointList(); };
 
   // ---------- 3D gestures ----------
@@ -505,7 +669,7 @@ void main(){
   async function setPlaying(on) {
     try {
       if (on) { vD.playbackRate = vS.playbackRate = opt.speed; await Promise.all([vD.play(), hasSrc ? vS.play() : null]); }
-      else { vD.pause(); vS.pause(); seek(master.currentTime); }
+      else { vD.pause(); vS.pause(); vBD.pause(); vBS.pause(); seek(master.currentTime); }
     } catch {}
     $("st-play").textContent = playing() ? "Pause" : "Play";
   }
@@ -560,19 +724,7 @@ void main(){
       ["seg", "bg", "Background", [["dark", "Dark"], ["grey", "Grey"], ["light", "Light"]]],
     ]],
     ...(opt.color !== "distance" ? [] : distanceGroups()),
-    ["Cut plane", [
-      ["seg", "cutType", "Cut by", [["depth", "One distance"], ["plane", "3-point plane"]]],
-      ...(opt.cutType === "plane"
-        ? (planePts
-          ? [["note", "Cuts along the plane through your 3 points. Tilted walls work too. It starts nudged slightly forward so the wall itself is removed cleanly; slide to 0 to put it exactly on the wall."],
-             ["seg", "cutMode", "Mode", [["off", "Off"], ["behind", "Hide behind"], ["front", "Hide in front"], ["outline", "Outline only"]]],
-             ["range", "planeOff", "Nudge the plane (back to front)", -40, 40, 1],
-             ["buttons", "Plane", ["Remove plane"], () => { planePts = null; savePlane(); opt.cutType = "depth"; saveOpt(); buildOptions(); }]]
-          : [["note", "No plane yet. In the Points tab, tap 3 spots on the wall, then tap Make a cut plane."]])
-        : [["note", "Slices the scene at one distance. Tip: map a point on the wall, then tap Cut here."],
-           ["seg", "cutMode", "Mode", [["off", "Off"], ["behind", "Hide behind"], ["front", "Hide in front"], ["outline", "Outline only"]]],
-           ["range", "cut", "Position (far to near)", 0, 100, 1]]),
-    ]],
+    ["Cuts", [["custom", cutsUI]]],
     ["Camera", [
       ["buttons", "View", Object.keys(VIEWS), setView],
       ["seg", "proj", "Lens", [["perspective", "Perspective"], ["flat", "Flat (no perspective)"]]],
@@ -592,7 +744,7 @@ void main(){
     if (key === "loop") vD.loop = vS.loop = opt.loop;
   }
   function buildOptions() {
-    if (tab === "watch") return buildWatchOptions();
+    if (tab === "watch") return watchKind === "merged" ? buildMergeOptions() : buildWatchOptions();
     if (tab === "points") return buildPointOptions();
     const root = $("st-options"); root.innerHTML = "";
     $("st-legend").hidden = opt.color !== "distance";
@@ -615,6 +767,7 @@ void main(){
         const [kind, key, label] = it;
         const field = el("div", "st-field");
         if (kind === "note") { field.appendChild(el("p", "muted", key)); }
+        else if (kind === "custom") { field.appendChild(key()); }
         else if (kind === "seg" || kind === "buttons") {
           field.appendChild(el("span", "st-label", kind === "buttons" ? key : label));
           const seg = el("div", "st-seg");
@@ -632,6 +785,13 @@ void main(){
           const r = el("input"); r.type = "range"; r.min = it[3]; r.max = it[4]; r.step = it[5]; r.value = opt[key];
           r.id = "opt-" + key; head.firstChild.htmlFor = r.id;
           r.oninput = () => { opt[key] = +r.value; val.textContent = r.value; applyOpt(key); };
+          field.append(head, r);
+        } else if (kind === "mrange") {
+          const head = el("div", "st-rhead"); const val = el("span", "st-rval", String(merge[key]));
+          head.append(el("label", "st-label", label), val);
+          const r = el("input"); r.type = "range"; r.min = it[3]; r.max = it[4]; r.step = it[5]; r.value = merge[key];
+          r.id = "merge-" + key; head.firstChild.htmlFor = r.id;
+          r.oninput = () => { merge[key] = +r.value; val.textContent = r.value; saveMerge(); clearExports(); };
           field.append(head, r);
         } else if (kind === "color") {
           const lab = el("label", "st-toggle"); const c = el("input"); c.type = "color"; c.value = opt[key]; c.id = "opt-" + key;
@@ -708,6 +868,51 @@ void main(){
   }
   let watchKind = "depth";
   const coloured = () => tab === "watch" && watchKind === "color";
+  const mergedView = () => tab === "watch" && watchKind === "merged";
+  /** The merged result on the Watch tab (or the plain foreground until a background is chosen). */
+  function drawMerged() {
+    const c = $("st-merge"), x = c.getContext("2d");
+    if (!initSliceGL() || vD.readyState < 2) return;
+    const w = vD.videoWidth || 2, h = vD.videoHeight || 2, scale = Math.min(1, 1280 / w);
+    if (c.width !== Math.round(w * scale) || c.height !== Math.round(h * scale)) { c.width = Math.round(w * scale); c.height = Math.round(h * scale); }
+    if (sliceRec) return;
+    drawSlice(bgOn() ? 2 : 0, scale);
+    x.clearRect(0, 0, c.width, c.height); x.drawImage(scv, 0, 0, c.width, c.height);
+  }
+  const mergeGroups = () => {
+    const others = (DP.clips || []).filter((c) => c.name !== (clip && clip.name));
+    return [["Background clip", [
+      ["note", "Pick the clip to use as the background, for example the empty wall. The foreground (this clip) shows only where it is nearer than the background. Cuts and points then use the background's depth."],
+      ["custom", () => {
+        const sel = el("select"); sel.id = "merge-bg"; sel.setAttribute("aria-label", "Background clip");
+        sel.appendChild(Object.assign(el("option", null, "None"), { value: "" }));
+        for (const c of others) { const o = el("option", null, `${c.title}${c.when ? " · " + c.when : ""}`); o.value = c.name; sel.appendChild(o); }
+        sel.value = merge.bg || "";
+        sel.onchange = async () => {
+          merge.bg = sel.value || null; saveMerge();
+          $("st-mmsg").className = "msg"; $("st-mmsg").textContent = merge.bg ? "Loading the background…" : "";
+          try { await loadBg(merge.bg); if (merge.bg) $("st-mmsg").textContent = autoMatch() ? "Background loaded and depth matched." : "Background loaded. Tap Auto-match depth once the picture shows."; }
+          catch (e) { $("st-mmsg").className = "msg bad"; $("st-mmsg").textContent = e.message; }
+          clearExports(); buildMergeOptions();
+        };
+        return sel;
+      }],
+      ...(!bgOn() ? [] : [
+        ["buttons", "Depth match", ["Auto-match depth"], () => { const ok = autoMatch(); buildMergeOptions(); $("st-mmsg").className = ok ? "msg ok" : "msg bad"; $("st-mmsg").textContent = ok ? "Depth matched on this frame." : "Couldn't read the frames yet. Try again in a moment."; }],
+        ["mrange", "a", "Foreground depth scale", 0.05, 5, 0.01],
+        ["mrange", "b", "Foreground depth offset", -1, 1, 0.005],
+        ["mrange", "bias", "Push the foreground back (−) or forward (+)", -20, 20, 0.25],
+        ["range", "edgeBlur", "Edge smoothing", 0, 8, 0.5],
+        ["range", "edgeSoft", "Edge softness", 0, 8, 0.5],
+      ]),
+    ]]];
+  };
+  function buildMergeOptions() {
+    const root = $("st-moptions"); root.innerHTML = "";
+    openGroups.add("Background clip");
+    renderGroups(root, mergeGroups());
+    $("st-mexport").hidden = !bgOn();
+  }
 
   // Save the coloured version: play the clip once from the start while recording the canvas.
   let recorded = null, recording = false;
@@ -749,18 +954,19 @@ void main(){
 
   // ---------- export the slice (what the cut keeps) ----------
   const scv = $("st-slice");
-  let sgl = null, sU = {}, sTexD = null, sTexC = null, sliceRec = false;
-  const SFS = (d) => `${AA(d)}precision mediump float;${EDGE_GLSL}
-uniform sampler2D C; uniform int ctype, cmode, outMode; uniform float cut, S; uniform vec2 asp; uniform vec4 plane;
+  let sgl = null, sU = {}, sTexD = null, sTexC = null, sTexBD = null, sTexBC = null, sliceRec = false;
+  // outMode 0: foreground with alpha (cut parts transparent), 1: mask (white = kept), 2: merged over the background.
+  const SFS = (d) => `${AA(d)}precision mediump float;${CUT_GLSL}${BLUR_GLSL}
+uniform sampler2D C, BD, BC; uniform int outMode, merged; uniform float S, bias; uniform vec2 asp;
 varying vec2 v;
 void main(){
-  float vd = blurDepth(v).x;
-  vec3 vp = vec3((v.x - 0.5) * asp.x, (0.5 - v.y) * asp.y, (vd - 0.5) * S);
-  float a = 1.0, pd = dot(plane.xyz, vp) + plane.w;
-  if (ctype == 0) { if (cmode == 1) a = keep(vd - cut); if (cmode == 2) a = keep(cut - vd); }
-  else { if (cmode == 1) a = keep(pd); if (cmode == 2) a = keep(-pd); }
+  float dd = mA * blurDepth(D, v) + mB;
+  float a = applyCuts(dd, vec2((v.x - 0.5) * asp.x, (0.5 - v.y) * asp.y), S);
+  if (merged == 1) a *= keep(dd - blurDepth(BD, v) - bias);   // foreground only where it is nearer than the background
   vec3 c = texture2D(C, v).rgb;
-  gl_FragColor = outMode == 1 ? vec4(vec3(a), 1.0) : vec4(c, a); }`;
+  if (outMode == 1) gl_FragColor = vec4(vec3(a), 1.0);
+  else if (outMode == 2) gl_FragColor = vec4(mix(texture2D(BC, v).rgb, c, a), 1.0);
+  else gl_FragColor = vec4(c, a); }`;
   function initSliceGL() {
     if (sgl) return true;
     sgl = scv.getContext("webgl", { alpha: true, premultipliedAlpha: false, preserveDrawingBuffer: true, antialias: false });
@@ -771,42 +977,42 @@ void main(){
     g.attachShader(pr, sh(g.VERTEX_SHADER, QUAD_VS));
     g.attachShader(pr, sh(g.FRAGMENT_SHADER, SFS(!!g.getExtension("OES_standard_derivatives"))));
     g.bindAttribLocation(pr, 0, "a"); g.linkProgram(pr); g.useProgram(pr);
-    for (const n of ["D", "C", "ctype", "cmode", "outMode", "cut", "S", "asp", "plane", "texel", "blurR", "invF", "soft"]) sU[n] = g.getUniformLocation(pr, n);
+    for (const n of ["D", "C", "BD", "BC", "outMode", "merged", "S", "bias", "asp", "texel", "blurR", "invF", "soft", "mA", "mB"]) sU[n] = g.getUniformLocation(pr, n);
+    for (const n of ["ck", "cm", "cv", "cp"]) sU[n] = g.getUniformLocation(pr, n + "[0]");
     const tex = (unit) => { const t = g.createTexture(); g.activeTexture(g.TEXTURE0 + unit); g.bindTexture(g.TEXTURE_2D, t);
       for (const [k, val] of [[g.TEXTURE_MIN_FILTER, g.LINEAR], [g.TEXTURE_MAG_FILTER, g.LINEAR], [g.TEXTURE_WRAP_S, g.CLAMP_TO_EDGE], [g.TEXTURE_WRAP_T, g.CLAMP_TO_EDGE]]) g.texParameteri(g.TEXTURE_2D, k, val);
       return t; };
-    sTexD = tex(0); sTexC = tex(1);
-    g.uniform1i(sU.D, 0); g.uniform1i(sU.C, 1);
+    sTexD = tex(0); sTexC = tex(1); sTexBD = tex(2); sTexBC = tex(3);
+    g.uniform1i(sU.D, 0); g.uniform1i(sU.C, 1); g.uniform1i(sU.BD, 2); g.uniform1i(sU.BC, 3);
     const b = g.createBuffer(); g.bindBuffer(g.ARRAY_BUFFER, b);
     g.bufferData(g.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), g.STATIC_DRAW);
     g.enableVertexAttribArray(0); g.vertexAttribPointer(0, 2, g.FLOAT, false, 0, 0);
     return true;
   }
-  /** What the current cut settings keep, or null when no cut is set up. */
-  function sliceSettings() {
-    const mode = ["off", "behind", "front", "outline"].indexOf(opt.cutMode);
-    if (mode !== 1 && mode !== 2) return null;
-    if (opt.cutType === "plane") { const pl = planeEq(); return pl ? { ctype: 1, cmode: mode, plane: pl } : null; }
-    return { ctype: 0, cmode: mode, plane: [0, 0, 0, 0] };
-  }
+  /** True when an export would change anything: an active cut, or a background to merge with. */
+  const sliceActive = () => cutArrays().active > 0 || bgOn();
   function drawSlice(outMode, scale) {
-    const g = sgl, st = sliceSettings() || { ctype: 0, cmode: 0, plane: [0, 0, 0, 0] };
+    const g = sgl, on = bgOn();
     const w = Math.max(2, Math.round((vD.videoWidth || 2) * scale / 2) * 2), h = Math.max(2, Math.round((vD.videoHeight || 2) * scale / 2) * 2);
     if (scv.width !== w || scv.height !== h) { scv.width = w; scv.height = h; }
     g.viewport(0, 0, w, h);
-    g.activeTexture(g.TEXTURE0); g.bindTexture(g.TEXTURE_2D, sTexD); g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, vD);
-    g.activeTexture(g.TEXTURE1); g.bindTexture(g.TEXTURE_2D, sTexC); g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, hasSrc ? vS : vD);
-    g.uniform1i(sU.ctype, st.ctype); g.uniform1i(sU.cmode, st.cmode); g.uniform1i(sU.outMode, outMode);
-    g.uniform1f(sU.cut, opt.cut / 100); g.uniform1f(sU.S, opt.strength); g.uniform1f(sU.invF, opt.invert ? 1 : 0);
+    const up = (unit, t, v) => { g.activeTexture(g.TEXTURE0 + unit); g.bindTexture(g.TEXTURE_2D, t); if (v.readyState >= 2) g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, v); };
+    up(0, sTexD, vD); up(1, sTexC, hasSrc ? vS : vD);
+    if (on) { up(2, sTexBD, vBD); up(3, sTexBC, vBS); }
+    setCutUniforms(g, sU, opt.edgeSoft * scale);
+    g.uniform1i(sU.outMode, outMode === 2 && !on ? 0 : outMode); g.uniform1i(sU.merged, on ? 1 : 0);
+    g.uniform1f(sU.bias, on ? merge.bias / 100 : 0);
+    g.uniform1f(sU.S, opt.strength); g.uniform1f(sU.invF, opt.invert ? 1 : 0);
     g.uniform2f(sU.texel, 1 / (vD.videoWidth || 1280), 1 / (vD.videoHeight || 720));
-    g.uniform1f(sU.blurR, opt.edgeBlur); g.uniform1f(sU.soft, opt.edgeSoft * scale);
-    g.uniform2fv(sU.asp, aspVec()); g.uniform4fv(sU.plane, st.plane);
+    g.uniform1f(sU.blurR, opt.edgeBlur);
+    g.uniform2fv(sU.asp, aspVec());
     g.clearColor(0, 0, 0, 0); g.clear(g.COLOR_BUFFER_BIT);
     g.drawArrays(g.TRIANGLE_STRIP, 0, 4);
   }
-  const seekBoth = (t) => Promise.all([vD, ...(hasSrc ? [vS] : [])].map((v) => new Promise((res) => {
+  const seekBoth = (t) => Promise.all([vD, ...(hasSrc ? [vS] : []), ...(bgOn() ? [vBD, vBS] : [])].map((v) => new Promise((res) => {
     const done = () => { v.removeEventListener("seeked", done); res(); };
-    v.addEventListener("seeked", done); v.currentTime = t; setTimeout(done, 3000);
+    const tt = v === vBD || v === vBS ? t % Math.max(0.05, vBD.duration || 1) : t;
+    v.addEventListener("seeked", done); v.currentTime = tt; setTimeout(done, 3000);
   })));
   async function shareFile(file) {
     try {
@@ -819,14 +1025,17 @@ void main(){
     sc.onload = res; sc.onerror = () => rej(new Error("Couldn't load the zip tool.")); document.head.appendChild(sc);
   });
   const ready = {};                                         // finished exports waiting for the second tap
-  /** Run one export. kind: "png" (transparent PNG frames, zip), "webm" (transparent video), "mask" (MP4 matte). */
+  /** Run one export. kind: "png" (transparent PNG frames, zip), "webm" (transparent video), "mask" (MP4 matte),
+   *  "merged" (the foreground composited over the background clip, MP4). */
   async function exportSlice(kind, btn) {
     const msg = $("st-xmsg"), label = btn.dataset.label;
     if (ready[kind]) { await shareFile(ready[kind]); return; }
-    if (!sliceSettings()) { msg.className = "msg bad"; msg.textContent = "Set up a cut first: in 3D, open Cut plane and choose Hide behind or Hide in front."; return; }
+    if (kind === "merged" && !bgOn()) { msg.className = "msg bad"; msg.textContent = "Choose a background clip first: Watch → Merged."; return; }
+    if (!sliceActive()) { msg.className = "msg bad"; msg.textContent = "Set up a cut first: in 3D, open Cuts and set one to Hide behind or Hide in front."; return; }
     if (sliceRec) return;
     if (!initSliceGL()) { msg.className = "msg bad"; msg.textContent = "This browser couldn't start the export."; return; }
-    const base = `${(clip && clip.title) || "clip"}_slice`, scale = $("st-xhalf").checked ? 0.5 : 1;
+    const base = `${(clip && clip.title) || "clip"}_${kind === "merged" ? "merged" : "slice"}`, scale = $("st-xhalf").checked ? 0.5 : 1;
+    const out = kind === "mask" ? 1 : kind === "merged" ? 2 : 0;
     document.querySelectorAll("#st-xbtns button").forEach((b) => { b.disabled = true; });
     msg.className = "msg";
     try {
@@ -848,16 +1057,16 @@ void main(){
         const type = typeof MediaRecorder !== "undefined" && scv.captureStream ? types.find((t) => MediaRecorder.isTypeSupported(t)) : null;
         if (!type) throw new Error(kind === "webm" ? "This browser can't record transparent video. Use Transparent PNG frames instead." : "This browser can't record video from the page.");
         if (clip.png) {                                       // a photo: one still frame, no recording needed
-          drawSlice(kind === "mask" ? 1 : 0, scale);
+          drawSlice(out, scale);
           ready[kind] = new File([await new Promise((r) => scv.toBlob(r, "image/png"))], `${base}${kind === "mask" ? "_mask" : ""}.png`, { type: "image/png" });
         } else {
-          drawSlice(kind === "mask" ? 1 : 0, scale);
+          drawSlice(out, scale);
           const chunks = [], rec = new MediaRecorder(scv.captureStream(30), { mimeType: type, videoBitsPerSecond: 12e6 });
           rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
           const wasLoop = opt.loop, wasSpeed = opt.speed;
           vD.loop = vS.loop = false; vD.playbackRate = vS.playbackRate = 1;
           await setPlaying(false); await seekBoth(0);
-          sliceRec = { out: kind === "mask" ? 1 : 0, scale };
+          sliceRec = { out, scale };
           msg.textContent = "Recording… the clip plays through once.";
           rec.start(250); await setPlaying(true);
           await new Promise((res) => { master.onended = res; });
@@ -886,11 +1095,13 @@ void main(){
   function frame() {
     raf = 0;
     if (!open) return;
+    syncBg();
     if (sliceRec && sgl) drawSlice(sliceRec.out, sliceRec.scale);
-    if (tab === "3d" || tab === "points" || coloured()) {
+    if (tab === "3d" || tab === "points" || coloured() || mergedView()) {
       if (hasSrc && Math.abs(vD.currentTime - vS.currentTime) > 0.07) vD.currentTime = vS.currentTime;
       sampleDepths();
       if (coloured()) { if (cgl) drawColor(); }
+      else if (mergedView()) drawMerged();
       else if (tab === "3d") { draw3D(); placeMarkers($("st-m3d"), project3D); }
       else { draw2D(); placeMarkers($("st-m2d"), (p) => [p.u * p2.clientWidth, p.v * p2.clientHeight]); updatePointValues(); }
       const d = master.duration || 0;
@@ -908,12 +1119,14 @@ void main(){
     for (const name of ["watch", "3d", "points", "files"]) $("pane-" + name).hidden = name !== t;
     $("pane-3d-options").hidden = t !== "3d"; $("pane-points-list").hidden = t !== "points";
     $("st-wcolor-opts").hidden = !(t === "watch" && watchKind === "color");
-    const colour = t === "watch" && watchKind === "color";
+    $("st-merge-opts").hidden = !(t === "watch" && watchKind === "merged");
+    const colour = t === "watch" && (watchKind === "color" || watchKind === "merged");
     $("st-transport").hidden = !(t === "3d" || t === "points" || colour) || !!(clip && clip.png);
     const w = $("st-watch");
     if (t !== "watch" || colour) w.pause();
     if (t !== "3d" && t !== "points" && !colour) setPlaying(false);
-    if (colour) {
+    if (colour && watchKind === "merged") buildMergeOptions();
+    else if (colour) {
       try { if (!initColorGL()) throw new Error("no webgl"); } catch { $("st-wexpmsg").className = "msg bad"; $("st-wexpmsg").textContent = "This browser couldn't start the colour view."; }
       buildWatchOptions();
       if (master.readyState < 2) seek(0.001);
@@ -940,13 +1153,16 @@ void main(){
     hasSrc = !!c.src;
     master = hasSrc ? vS : vD;
     points = store.get("depthpass-pts:" + c.name, []).map((p) => ({ u: p.u, v: p.v, m: p.m ?? null, d: null })); selected = -1;
-    planePts = store.get("depthpass-plane:" + c.name, null);
+    loadCuts(c.name);
+    merge = { bg: null, a: 1, b: 0, bias: 0, ...store.get("depthpass-merge:" + c.name, {}) };
     try {
       const [fd, fs] = await Promise.all([DP.getFile(c.depth.path, c.depth.name), hasSrc ? DP.getFile(c.src.path, c.src.name) : null]);
       if (clip !== c) return;
       const ud = DP.urlFor(c.depth.path, fd), us = fs ? DP.urlFor(c.src.path, fs) : null;
       const ready = (v, u) => new Promise((res, rej) => { v.onloadeddata = res; v.onerror = () => rej(new Error("This browser couldn't play the video.")); v.src = u; v.load(); });
       await Promise.all([ready(vD, ud), us ? ready(vS, us) : null]);
+      if (clip !== c) return;
+      if (merge.bg) { try { await loadBg(merge.bg); } catch { merge.bg = null; } }
       if (clip !== c) return;
       aspect = (vD.videoWidth || 16) / (vD.videoHeight || 9);
       samp.height = Math.round(samp.width / aspect);
@@ -956,9 +1172,9 @@ void main(){
       const w = $("st-watch"); watchKind = "depth"; clearRecording();
       $("st-wseg").querySelector('[data-kind="src"]').hidden = !us;
       const showWatch = () => {
-        const colour = watchKind === "color";
-        w.hidden = colour; $("st-wcolor").hidden = !colour;
-        if (!colour) { const want = watchKind === "depth" ? ud : us; if (w.src !== want) w.src = want; }
+        const colour = watchKind === "color", mergedK = watchKind === "merged";
+        w.hidden = colour || mergedK; $("st-wcolor").hidden = !colour; $("st-merge").hidden = !mergedK;
+        if (!colour && !mergedK) { const want = watchKind === "depth" ? ud : us; if (w.src !== want) w.src = want; }
         document.querySelectorAll("#st-wseg button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.kind === watchKind)));
         setTab("watch");
       };
@@ -985,7 +1201,8 @@ void main(){
     }
   }
   function closeClip() {
-    open = false; clip = null;
+    open = false; clip = null; bgReady = false; bgClip = null;
+    for (const v of [vBD, vBS]) { v.pause(); v.removeAttribute("src"); v.load(); }
     if (raf) cancelAnimationFrame(raf); raf = 0;
     for (const v of [vD, vS, $("st-watch")]) { v.pause(); v.removeAttribute("src"); v.load(); }
     $("studio").hidden = true; document.querySelector("main").hidden = false;
