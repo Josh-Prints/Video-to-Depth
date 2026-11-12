@@ -1,1 +1,1 @@
-{"run_id": "43202768389", "started": 1794480218, "stage": "converting", "file": "kaggletest.mp4", "file_index": 1, "file_count": 1, "done": 0, "total": 0, "error": null, "updated": 1794480218}
+{"run_id": "43202768389", "started": 1794480218, "stage": "converting", "file": "kaggletest.mp4", "file_index": 1, "file_count": 1, "done": 0, "total": 0, "error": null, "updated": 1794480221, "note": "GPU unavailable, using the slower machine"}
