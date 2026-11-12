@@ -29,6 +29,23 @@ ENCODER = os.environ.get("ENCODER") or "vits"           # vits (fast) or vitl (b
 # Measured on Kaggle's ~15 GB GPU: Large at 518 needs ~20 GB, Base at 518 misses by ~100 MB.
 KAGGLE_ENCODER = os.environ.get("KAGGLE_ENCODER") or "vitb:448,vitb:392,vits:518"
 INPUT_SIZE = int(os.environ.get("INPUT_SIZE") or 518)   # model working resolution, a multiple of 14
+
+
+def kaggle_plan(msg):
+    """The upload page puts the chosen quality in the commit message as [model=vitb size=448].
+    Returns the model:size pairs to try in order: the choice first, then safer steps down."""
+    import re
+    m = re.search(r"\[model=(vit[sbl]) size=(\d+)\]", msg or "")
+    if not m:
+        return KAGGLE_ENCODER
+    enc, size = m.group(1), max(196, min(518, int(m.group(2)) // 14 * 14))
+    plan = [f"{enc}:{size}"]
+    if enc != "vits" and size > 392:
+        plan.append(f"{enc}:392")
+    for step in KAGGLE_ENCODER.split(","):
+        if step not in plan:
+            plan.append(step)
+    return ",".join(plan)
 KAGGLE_TIMEOUT = int(os.environ.get("KAGGLE_TIMEOUT") or 3600)
 VDA_SHA = os.environ.get("VDA_SHA") or "4f5ae23172ba60fd7bc11ef671cca678842c7072"
 PNG16 = (os.environ.get("PNG16") or "true").lower() == "true"
@@ -302,7 +319,7 @@ def run_kaggle(src, name):
     with tempfile.TemporaryDirectory() as tmp:
         with open(os.path.join(tmp, "run.py"), "w") as f:
             f.write(KERNEL.format(repo=os.environ["GITHUB_REPOSITORY"], sha=os.environ["GITHUB_SHA"], vda_sha=VDA_SHA,
-                                  encs=KAGGLE_ENCODER,
+                                  encs=kaggle_plan(os.environ.get("UPLOAD_MSG")),
                                   file=os.path.basename(src), max_res=MAX_RES, max_fps=MAX_FPS))
         with open(os.path.join(tmp, "kernel-metadata.json"), "w") as f:
             json.dump({"id": ref, "title": slug, "code_file": "run.py", "language": "python", "kernel_type": "script",

@@ -86,6 +86,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           GH_TOKEN: ${{ github.token }}
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          UPLOAD_MSG: ${{ github.event.head_commit.message }}
           KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
           ONLY_FILE: ${{ inputs.file || steps.pick.outputs.files }}
           FORCE: ${{ inputs.force }}

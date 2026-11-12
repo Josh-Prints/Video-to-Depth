@@ -73,6 +73,7 @@ input[type=password], input[type=text] {
 .run:first-child { border-top: 0; }
 .run .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.95rem; }
 .run .time { font: 13px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.run .how { grid-column: 1 / 4; font-size: 0.85rem; color: var(--muted); }
 .run .err { grid-column: 1 / 4; font-size: 0.85rem; color: var(--bad); word-break: break-word; }
 .pill { font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: 0.06em; padding: 3px 8px; border-radius: 999px; border: 1px solid currentColor; }
 .pill.ok { color: var(--ok); } .pill.bad { color: var(--bad); } .pill.warn { color: var(--warn); } .pill.muted { color: var(--muted); }
@@ -94,6 +95,9 @@ video { width: 100%; max-width: 100%; border-radius: 8px; background: #000; max-
 .chev { color: var(--muted); font-size: 1.4rem; }
 details.fold { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
 .fold-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding-top: 12px; }
+details.quality { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+details.quality > summary { font-weight: 500; color: var(--fg); }
+details.quality[open] > summary { margin-bottom: 0; }
 details.fold > summary { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
 
 /* Clip view */
@@ -218,6 +222,24 @@ a { color: var(--accent); }
         <span class="muted">For the original quality, pick from <b>Files</b> (in Photos, Share → Save to Files first). Max 95 MB.</span>
       </label>
       <p id="file-info" class="file" hidden></p>
+      <details class="quality" id="quality">
+        <summary>Quality: <span id="q-summary"></span></summary>
+        <div class="fold-body">
+          <div class="st-field">
+            <span class="st-label">Model</span>
+            <div class="st-seg" id="q-model">
+              <button data-m="vits">Small</button><button data-m="vitb">Base</button><button data-m="vitl">Large</button>
+            </div>
+            <p class="muted">Bigger models judge depth more accurately and need more GPU memory.</p>
+          </div>
+          <div class="st-field">
+            <div class="st-rhead"><label class="st-label" for="q-size">Working resolution</label><span class="st-rval" id="q-size-val"></span></div>
+            <input id="q-size" type="range" min="280" max="518" step="14">
+            <p class="muted">Higher keeps finer edges and needs more memory. The saved video size doesn't change.</p>
+          </div>
+          <p id="q-fit" class="msg"></p>
+        </div>
+      </details>
       <button id="send" disabled>Upload and make depth</button>
       <div class="bar" id="prog" hidden><i></i></div>
       <p id="up-msg" class="msg"></p>
@@ -545,6 +567,29 @@ a { color: var(--accent); }
     show();
   };
 
+  // ---------- quality choice ----------
+  const MODELS = { vits: "Small", vitb: "Base", vitl: "Large" };
+  // GPU memory at working size 518, in GB. Large and Base were measured on Kaggle's 14.5 GB GPU
+  // (Large ran out asking for ~20, Base missed by ~0.1); Small is a rough guess. Scales with size squared.
+  const MEM518 = { vits: 6, vitb: 14.7, vitl: 20 }, GPU_GB = 14.5;
+  let quality = { model: "vitb", size: 448 };
+  try { const q = JSON.parse(ls.get("depthpass-quality") || "null"); if (q && MODELS[q.model]) quality = q; } catch {}
+  function renderQuality() {
+    const need = MEM518[quality.model] * (quality.size / 518) ** 2;
+    $("q-summary").textContent = `${MODELS[quality.model]} at ${quality.size}`;
+    $("q-size").value = quality.size; $("q-size-val").textContent = quality.size;
+    document.querySelectorAll("#q-model button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.m === quality.model)));
+    const fit = $("q-fit"), est = `Estimated ${need.toFixed(1)} GB of the GPU's ${GPU_GB} GB.`;
+    if (need <= GPU_GB * 0.9) { fit.className = "msg ok"; fit.textContent = `${est} Should fit.`; }
+    else if (need <= GPU_GB) { fit.className = "msg warn"; fit.textContent = `${est} Borderline. If it doesn't fit, the job steps down by itself.`; }
+    else { fit.className = "msg bad"; fit.textContent = `${est} Too big. The job will step down to a lower setting by itself.`; }
+    ls.set("depthpass-quality", JSON.stringify(quality));
+  }
+  document.querySelectorAll("#q-model button").forEach((b) => { b.onclick = () => { quality.model = b.dataset.m; renderQuality(); }; });
+  $("q-size").oninput = () => { quality.size = +$("q-size").value; renderQuality(); };
+  renderQuality();
+  const QUALITY_TEXT = (spec) => { const [m, sz] = String(spec).split(":"); return MODELS[m] ? `${MODELS[m]} at ${sz}` : ""; };
+
   // ---------- upload ----------
   let picked = null;
   $("file").onchange = () => {
@@ -601,7 +646,7 @@ a { color: var(--accent); }
           rej(new Error(x.status === 401 ? "GitHub no longer accepts the saved token. Log out, reset, and set up again." : `Upload failed (${x.status}${m ? ": " + m : ""}).`));
         };
         x.onerror = () => rej(new Error("Network error during upload. Check your connection and try again."));
-        x.send(JSON.stringify({ message: `Upload ${name}`, content: data, branch: "main" }));
+        x.send(JSON.stringify({ message: `Upload ${name}\n\n[model=${quality.model} size=${quality.size}]`, content: data, branch: "main" }));
       });
       $("prog").firstChild.style.width = "100%";
       $("up-msg").className = "msg ok";
@@ -619,6 +664,7 @@ a { color: var(--accent); }
   };
 
   // ---------- jobs + live progress ----------
+  const el2 = (tag, cls) => { const e = document.createElement(tag); e.className = cls; return e; };
   const cleanTitle = (t) => t.replace(/^Upload /, "").replace(USER_RE, "").replace(/^\d{8}-\d{6}_/, "");
   function ago(iso) {
     const s = Math.max(0, (Date.now() - new Date(iso)) / 1000);
@@ -673,6 +719,7 @@ a { color: var(--accent); }
     return el;
   }
 
+  const doneProg = {};   // finished run id -> its final progress record (never changes, so fetched once)
   async function loadRuns() {
     const el = $("runs");
     try {
@@ -684,7 +731,9 @@ a { color: var(--accent); }
       const active = runs.filter((r) => r.status !== "completed" && !stuck(r)).reverse();
       const failed = runs.filter((r) => r.status === "completed" && r.conclusion === "failure").slice(0, 2);
       const prog = {};
-      await Promise.all([...active, ...failed].map(async (r) => { prog[r.id] = await loadProgress(r.id); }));
+      const finished = runs.filter((r) => r.status === "completed" && r.conclusion === "success" && !(r.id in doneProg)).slice(0, 4);
+      await Promise.all([...active, ...failed].map(async (r) => { prog[r.id] = await loadProgress(r.id); })
+        .concat(finished.map(async (r) => { doneProg[r.id] = await loadProgress(r.id); })));
       if (!token) return;
       anyRunning = active.length > 0;
       $("now-card").hidden = !active.length;
@@ -702,6 +751,13 @@ a { color: var(--accent); }
         row.children[0].classList.add(cls); row.children[0].textContent = label;
         row.children[1].textContent = cleanTitle(r.display_title);
         row.children[2].textContent = done ? `${span((new Date(r.updated_at) - new Date(start)) / 1000)} · ${ago(r.updated_at)}` : `${span((Date.now() - new Date(start)) / 1000)} so far`;
+        const fin = doneProg[r.id];
+        if (label === "done" && fin) {
+          const how = el2("span", "how");
+          how.textContent = fin.kaggle_model ? `Cloud GPU · ${QUALITY_TEXT(fin.kaggle_model)}${fin.kaggle_attempts ? " (stepped down: the first choice didn't fit)" : ""}`
+            : fin.kaggle_error ? "Slow machine · Small (the cloud GPU wasn't available)" : "";
+          if (how.textContent) row.appendChild(how);
+        }
         if (label === "failed") {
           const e = document.createElement("span"); e.className = "err";
           e.textContent = prog[r.id] && prog[r.id].error ? prog[r.id].error : "The job stopped before finishing. Try uploading the clip again.";
