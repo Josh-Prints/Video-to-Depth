@@ -38,7 +38,7 @@ Accepted: `.mov .mp4 .m4v .mkv .webm .avi .3gp .mts .m2ts .ts .wmv .flv .mpg .mp
 Every input gets re-encoded first: phone rotation is baked in, HEVC is converted to H.264, audio is dropped, the long side is capped at 1280 and the frame rate at 30. Clips that already have output are skipped.
 
 ## Faster and better: Kaggle's free GPU
-Add two repository secrets (Settings → Secrets and variables → Actions): `KAGGLE_USERNAME` and `KAGGLE_KEY` (a Kaggle API token; the account must be phone-verified so GPU and internet are allowed). Uploads then run the **Large** model on a Kaggle GPU. If Kaggle refuses or fails, the job falls back to the runner's CPU with the Small model, so you still get a result. Without the secrets nothing changes.
+Add two repository secrets (Settings → Secrets and variables → Actions): `KAGGLE_USERNAME` and `KAGGLE_KEY` (a Kaggle API token; the account must be phone-verified so GPU and internet are allowed). Uploads then run the **Base** model on a Kaggle GPU (Large does not fit in the free GPU's memory). If Kaggle refuses or fails, the job falls back to the runner's CPU with the Small model, so you still get a result. Without the secrets nothing changes.
 
 ## Limits
 - **GitHub web upload max is 25 MB per file.** A 9 s clip at 1080p30 fits. 4K or 60 fps probably won't, so film at 1080p30.

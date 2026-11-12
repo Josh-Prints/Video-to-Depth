@@ -25,7 +25,10 @@ BACKEND = (os.environ.get("BACKEND") or "local").lower()
 MAX_RES = int(os.environ.get("MAX_RES") or 1280)
 MAX_FPS = int(os.environ.get("MAX_FPS") or 30)
 ENCODER = os.environ.get("ENCODER") or "vits"           # vits (fast) or vitl (better, much slower on CPU)
-KAGGLE_ENCODER = os.environ.get("KAGGLE_ENCODER") or "vitl"   # model used on Kaggle's GPU
+# "model:working size" pairs tried in order on Kaggle's GPU; each failure moves on to the next.
+# Measured on Kaggle's ~15 GB GPU: Large at 518 needs ~20 GB, Base at 518 misses by ~100 MB.
+KAGGLE_ENCODER = os.environ.get("KAGGLE_ENCODER") or "vitb:448,vitb:392,vits:518"
+INPUT_SIZE = int(os.environ.get("INPUT_SIZE") or 518)   # model working resolution, a multiple of 14
 KAGGLE_TIMEOUT = int(os.environ.get("KAGGLE_TIMEOUT") or 3600)
 VDA_SHA = os.environ.get("VDA_SHA") or "4f5ae23172ba60fd7bc11ef671cca678842c7072"
 PNG16 = (os.environ.get("PNG16") or "true").lower() == "true"
@@ -185,10 +188,10 @@ def run_local(clean, name):
     vd.tqdm = windows
 
     frames, fps = read_video_frames(clean, -1, -1, MAX_RES)
-    print(f"{len(frames)} frames at {frames.shape[2]}x{frames.shape[1]}, {fps:.2f} fps. Running {ENCODER} on {DEVICE}...")
+    print(f"{len(frames)} frames at {frames.shape[2]}x{frames.shape[1]}, {fps:.2f} fps. Running {ENCODER} at {INPUT_SIZE} on {DEVICE}...")
     t = time.time()
     with torch.inference_mode():
-        depths, fps = _model.infer_video_depth(frames, fps, input_size=518, device=DEVICE, fp32=(DEVICE == "cpu"))
+        depths, fps = _model.infer_video_depth(frames, fps, input_size=INPUT_SIZE, device=DEVICE, fp32=(DEVICE == "cpu"))
     print(f"Inference took {time.time() - t:.0f}s")
 
     PROGRESS.update(stage="saving")
@@ -232,13 +235,24 @@ sh("pip install -q easydict einops imageio imageio-ffmpeg pillow-heif")
 sh("git clone -q https://github.com/{repo} app && git -C app checkout -q {sha}")
 os.chdir("app")
 sh("git init -q vda && git -C vda fetch -q --depth 1 https://github.com/DepthAnything/Video-Depth-Anything {vda_sha} && git -C vda checkout -q FETCH_HEAD")
-sh("mkdir -p vda/checkpoints && curl -fL --retry 3 -o vda/checkpoints/video_depth_anything_{enc}.pth "
-   "https://huggingface.co/depth-anything/Video-Depth-Anything-{size}/resolve/main/video_depth_anything_{enc}.pth")
 for f in glob.glob("output/*"):
     if not f.endswith(".gitkeep"): os.remove(f)
-env = dict(os.environ, BACKEND="local", ENCODER="{enc}", ONLY_FILE={file!r}, FORCE="true",
-           MAX_RES="{max_res}", MAX_FPS="{max_fps}", GITHUB_EVENT_NAME="", GH_TOKEN="", GITHUB_TOKEN="")
-subprocess.run([sys.executable, "depth.py"], check=True, env=env)
+SIZE = dict(vitl="Large", vitb="Base", vits="Small")
+ok = False
+for spec in {encs!r}.split(","):
+    enc, size = (spec.split(":") + ["518"])[:2]
+    sh("mkdir -p vda/checkpoints && curl -fL --retry 3 -o vda/checkpoints/video_depth_anything_%s.pth "
+       "https://huggingface.co/depth-anything/Video-Depth-Anything-%s/resolve/main/video_depth_anything_%s.pth" % (enc, SIZE[enc], enc))
+    env = dict(os.environ, BACKEND="local", ENCODER=enc, INPUT_SIZE=size, ONLY_FILE={file!r}, FORCE="true",
+               MAX_RES="{max_res}", MAX_FPS="{max_fps}", GITHUB_EVENT_NAME="", GH_TOKEN="", GITHUB_TOKEN="",
+               PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
+    r = subprocess.run([sys.executable, "depth.py"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    print(r.stdout[-3000:], flush=True)
+    if r.returncode == 0:
+        open("/kaggle/working/model.txt", "w").write(spec); ok = True; break
+    why = [l for l in r.stdout.splitlines() if "Error" in l or "FAILED" in l][-2:]
+    open("/kaggle/working/attempts.txt", "a").write("%s: %s" % (spec, " | ".join(why)[:500]) + chr(10))
+if not ok: raise SystemExit("every model failed")
 out = "/kaggle/working"
 for f in glob.glob("output/*"):
     if not f.endswith(".gitkeep"): shutil.copy(f, out)
@@ -260,6 +274,24 @@ def kaggle(*args, check=True):
     return out
 
 
+def kaggle_log(ref, tmp):
+    """Last lines of a Kaggle job's own log, so a failure there is explained here."""
+    import glob, json
+    try:
+        d = os.path.join(tmp, "faillog")
+        kaggle("kernels", "output", ref, "-p", d, check=False)
+        lines = []
+        for f in glob.glob(os.path.join(d, "*.log")):
+            raw = open(f, errors="replace").read()
+            try:
+                lines += [str(e.get("data", "")).rstrip() for e in json.loads(raw)]
+            except Exception:
+                lines += raw.splitlines()
+        return "\n".join(l for l in lines if l.strip())[-1500:] or "(no log returned)"
+    except Exception as e:
+        return f"(could not fetch the log: {e})"
+
+
 def run_kaggle(src, name):
     import json, re
     user = os.environ.get("KAGGLE_USERNAME")
@@ -270,7 +302,7 @@ def run_kaggle(src, name):
     with tempfile.TemporaryDirectory() as tmp:
         with open(os.path.join(tmp, "run.py"), "w") as f:
             f.write(KERNEL.format(repo=os.environ["GITHUB_REPOSITORY"], sha=os.environ["GITHUB_SHA"], vda_sha=VDA_SHA,
-                                  enc=KAGGLE_ENCODER, size="Large" if KAGGLE_ENCODER == "vitl" else "Small",
+                                  encs=KAGGLE_ENCODER,
                                   file=os.path.basename(src), max_res=MAX_RES, max_fps=MAX_FPS))
         with open(os.path.join(tmp, "kernel-metadata.json"), "w") as f:
             json.dump({"id": ref, "title": slug, "code_file": "run.py", "language": "python", "kernel_type": "script",
@@ -289,12 +321,19 @@ def run_kaggle(src, name):
                 if "complete" in st:
                     break
                 if re.search(r"error|cancel|fail", st.split("status")[-1]):
-                    raise RuntimeError(f"Kaggle job failed: {st[-300:]}")
+                    raise RuntimeError(f"Kaggle job failed. Its log ended with:\n{kaggle_log(ref, tmp)}")
                 if time.time() > deadline:
                     raise RuntimeError("Kaggle job timed out")
             out = os.path.join(tmp, "out")
             kaggle("kernels", "output", ref, "-p", out)
             got = [f for f in os.listdir(out) if f.startswith(name + "_")]
+            try: used = open(os.path.join(out, "model.txt")).read().strip()
+            except OSError: used = "?"
+            print(f"Kaggle used model: {used}")
+            try: tried = open(os.path.join(out, "attempts.txt")).read().strip()
+            except OSError: tried = ""
+            if tried: print(f"Models that failed on Kaggle first:\n{tried}")
+            PROGRESS.update(kaggle_model=used, kaggle_attempts=tried[-1200:])
             if f"{name}_depth.mp4" not in got:
                 raise RuntimeError(f"Kaggle finished but returned no depth video (files: {os.listdir(out)})")
             PROGRESS.update(stage="saving")
@@ -380,11 +419,12 @@ def main():
             if BACKEND == "kaggle":
                 try:
                     run_kaggle(src, name)
-                    print(f"Saved output/{name}_depth.mp4 (Kaggle GPU, {KAGGLE_ENCODER})")
+                    print(f"Saved output/{name}_depth.mp4 (Kaggle GPU)")
                     continue
                 except Exception as e:
                     print(f"Kaggle didn't work ({e}). Falling back to this machine's CPU.")
-                    PROGRESS.update(stage="converting", note="GPU unavailable, using the slower machine")
+                    PROGRESS.update(stage="converting", note="GPU unavailable, using the slower machine",
+                                    kaggle_error=str(e)[-1500:])
             with tempfile.TemporaryDirectory() as tmp:
                 clean = os.path.join(tmp, f"{name}.mp4")
                 IS_PHOTO = os.path.splitext(src)[1].lower() in IMAGE_EXT
@@ -392,7 +432,7 @@ def main():
                 run(clean, name)
             print(f"Saved output/{name}_depth.mp4 and output/{name}_src.mp4")
         except Exception as e:
-            print(f"FAILED {src}: {e}")
+            print(f"FAILED {src}: {type(e).__name__}: {str(e)[:600]}")
             failed.append(src)
             PROGRESS.update(stage="failed", error=str(e)[:300])
     if failed:
