@@ -10,12 +10,57 @@
   const DEFAULTS = {
     style: "mesh", strength: 0.6, density: 240, pointSize: 3, invert: false, edge: 35,
     color: "video", bright: 1, bg: "dark",
+    dPalette: "turbo", dFarCol: "#1b1f5e", dMidCol: "#e0457b", dNearCol: "#ffd34d",
+    dMix: 100, dLo: 0, dHi: 100, dGamma: 1, dSteps: 0, dFlip: false, dHide: false,
+    lines: 0, lineW: 15, lineCol: "#ffffff",
+    hl: false, hlPos: 50, hlWidth: 4, hlCol: "#ff3b30",
     cutMode: "off", cut: 50,
     proj: "perspective", spin: false,
     speed: 1, loop: true,
   };
   let opt = { ...DEFAULTS, ...store.get("depthpass-view", {}) };
+  if (["depth", "heat", "bands"].includes(opt.color)) {      // settings saved by the earlier version
+    opt.dPalette = opt.color === "heat" ? "heat" : "grey"; if (opt.color === "bands") opt.lines = 20; opt.color = "distance";
+  }
   const saveOpt = () => store.set("depthpass-view", opt);
+
+  // ---------- distance colours ----------
+  const PALETTES = {
+    grey: ["#000000", "#ffffff"],
+    heat: ["#0b0bff", "#00e5ff", "#39ff14", "#ffe600", "#ff2a00"],
+    turbo: ["#30123b", "#4662d7", "#36aaf9", "#1ae4b6", "#72fe5e", "#c7ef34", "#faba39", "#f66b19", "#ca2a04", "#7a0403"],
+    viridis: ["#440154", "#3b528b", "#21918c", "#5ec962", "#fde725"],
+    magma: ["#000004", "#3b0f70", "#8c2981", "#de4968", "#fe9f6d", "#fcfdbf"],
+    ocean: ["#03071e", "#023e8a", "#0096c7", "#48cae4", "#caf0f8"],
+  };
+  const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  const limits = () => [Math.min(opt.dLo, opt.dHi) / 100, Math.max(opt.dLo, opt.dHi) / 100];
+  /** 256 colours, one per depth value from far (0) to near (255), with every colour setting applied. */
+  function buildLUT() {
+    const stops = (opt.dPalette === "custom" ? [opt.dFarCol, opt.dMidCol, opt.dNearCol] : PALETTES[opt.dPalette] || PALETTES.grey).map(rgb);
+    const [lo, hi] = limits(), out = new Uint8Array(256 * 4);
+    for (let i = 0; i < 256; i++) {
+      let u = Math.min(1, Math.max(0, (i / 255 - lo) / Math.max(hi - lo, 0.001)));
+      u = Math.pow(u, opt.dGamma);
+      if (opt.dSteps >= 2) u = Math.min(Math.floor(u * opt.dSteps), opt.dSteps - 1) / (opt.dSteps - 1);
+      if (opt.dFlip) u = 1 - u;
+      const x = u * (stops.length - 1), k = Math.min(Math.floor(x), stops.length - 2), f = x - k;
+      for (let c = 0; c < 3; c++) out[i * 4 + c] = Math.round(stops[k][c] + (stops[k + 1][c] - stops[k][c]) * f);
+      out[i * 4 + 3] = 255;
+    }
+    return out;
+  }
+  let lutSig = "";
+  function syncLUT() {
+    const sig = [opt.dPalette, opt.dFarCol, opt.dMidCol, opt.dNearCol, opt.dLo, opt.dHi, opt.dGamma, opt.dSteps, opt.dFlip].join("|");
+    if (sig === lutSig) return;
+    lutSig = sig;
+    const lut = buildLUT();
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, texL);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, lut);
+    const c = $("st-lut"), ctx = c.getContext("2d"), im = ctx.createImageData(256, 1);
+    im.data.set(lut); ctx.putImageData(im, 0, 0);
+  }
 
   // ---------- state ----------
   let clip = null, tab = "watch", raf = 0, open = false;
@@ -26,7 +71,7 @@
 
   // ---------- GL ----------
   const glc = $("st-gl");
-  let gl = null, prog = null, U = {}, texD = null, texC = null, deriv = false;
+  let gl = null, prog = null, U = {}, texD = null, texC = null, texL = null, deriv = false;
   let grid = { n: 0, verts: 0, tri: 0, line: 0, vb: null, tb: null, lb: null };
   let M = new Float32Array(16);
 
@@ -36,18 +81,21 @@ varying vec2 v; varying float vd;
 void main(){ float d = texture2D(D, a).r; if (inv > 0.5) d = 1.0 - d; vd = d; v = a;
   gl_Position = M * vec4((a.x - 0.5) * asp.x, (0.5 - a.y) * asp.y, (d - 0.5) * S, 1.0); gl_PointSize = ps; }`;
   const FS = (d) => `${d ? "#extension GL_OES_standard_derivatives : enable\n" : ""}precision mediump float;
-uniform sampler2D C; uniform int mode, cutMode; uniform float cut, edge, bright;
+uniform sampler2D C, L; uniform int mode, cutMode, hideOut;
+uniform float cut, edge, bright, dmix, lo, hi, lines, lineW, hlOn, hlPos, hlW; uniform vec3 lineCol, hlCol;
 varying vec2 v; varying float vd;
-vec3 heat(float t){ return clamp(vec3(1.5 - abs(4.0 * t - 3.0), 1.5 - abs(4.0 * t - 2.0), 1.5 - abs(4.0 * t - 1.0)), 0.0, 1.0); }
 void main(){
   if (cutMode == 1 && vd < cut) discard;
   if (cutMode == 2 && vd > cut) discard;
   ${d ? "if (edge > 0.0 && fwidth(vd) > edge) discard;" : ""}
-  vec3 c;
-  if (mode == 0) c = texture2D(C, v).rgb;
-  else if (mode == 1) c = vec3(vd);
-  else if (mode == 2) c = heat(vd);
-  else c = mix(texture2D(C, v).rgb, vec3(1.0), step(0.9, fract(vd * 20.0)) * 0.7);
+  vec3 c = texture2D(C, v).rgb;
+  if (mode == 1) {
+    if (hideOut == 1 && (vd < lo || vd > hi)) discard;
+    c = mix(c, texture2D(L, vec2(vd, 0.5)).rgb, dmix);
+    float u = (vd - lo) / max(hi - lo, 0.001);
+    if (lines > 0.0 && u > 0.0 && u < 1.0 && fract(u * lines) < lineW) c = lineCol;
+    if (hlOn > 0.5 && abs(vd - hlPos) < hlW) c = mix(c, hlCol, 0.85);
+  }
   c *= bright;
   if (cutMode != 0 && abs(vd - cut) < 0.012) c = mix(c, vec3(0.2, 0.55, 1.0), 0.85);
   gl_FragColor = vec4(c, 1.0); }`;
@@ -64,13 +112,13 @@ void main(){
     gl.bindAttribLocation(prog, 0, "a"); gl.linkProgram(prog);
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
     gl.useProgram(prog);
-    for (const n of ["D", "C", "M", "S", "inv", "ps", "asp", "mode", "cutMode", "cut", "edge", "bright"]) U[n] = gl.getUniformLocation(prog, n);
+    for (const n of ["D", "C", "L", "M", "S", "inv", "ps", "asp", "mode", "cutMode", "cut", "edge", "bright", "hideOut", "dmix", "lo", "hi", "lines", "lineW", "hlOn", "hlPos", "hlW", "lineCol", "hlCol"]) U[n] = gl.getUniformLocation(prog, n);
     const tex = (unit) => { const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128, 128, 128, 255])); return t; };
-    texD = tex(0); texC = tex(1);
-    gl.uniform1i(U.D, 0); gl.uniform1i(U.C, 1);
+    texD = tex(0); texC = tex(1); texL = tex(2); lutSig = "";
+    gl.uniform1i(U.D, 0); gl.uniform1i(U.C, 1); gl.uniform1i(U.L, 2);
     gl.enable(gl.DEPTH_TEST);
     return true;
   }
@@ -137,7 +185,13 @@ void main(){
     gl.uniform1f(U.S, opt.strength); gl.uniform1f(U.inv, opt.invert ? 1 : 0);
     gl.uniform1f(U.ps, opt.pointSize * Math.min(window.devicePixelRatio || 1, 2));
     gl.uniform2fv(U.asp, aspVec());
-    gl.uniform1i(U.mode, ["video", "depth", "heat", "bands"].indexOf(opt.color));
+    syncLUT();
+    const [lo, hi] = limits(), col = (h) => rgb(h).map((x) => x / 255);
+    gl.uniform1i(U.mode, opt.color === "distance" ? 1 : 0);
+    gl.uniform1i(U.hideOut, opt.dHide ? 1 : 0);
+    gl.uniform1f(U.dmix, opt.dMix / 100); gl.uniform1f(U.lo, lo); gl.uniform1f(U.hi, hi);
+    gl.uniform1f(U.lines, opt.lines); gl.uniform1f(U.lineW, opt.lineW / 100); gl.uniform3fv(U.lineCol, col(opt.lineCol));
+    gl.uniform1f(U.hlOn, opt.hl ? 1 : 0); gl.uniform1f(U.hlPos, opt.hlPos / 100); gl.uniform1f(U.hlW, opt.hlWidth / 200); gl.uniform3fv(U.hlCol, col(opt.hlCol));
     gl.uniform1i(U.cutMode, ["off", "behind", "front", "outline"].indexOf(opt.cutMode));
     gl.uniform1f(U.cut, opt.cut / 100);
     gl.uniform1f(U.edge, opt.style === "mesh" && opt.edge > 0 ? 0.15 * Math.pow(0.03, opt.edge / 100) : 0);
@@ -276,7 +330,7 @@ void main(){
   $("st-scrub").addEventListener("change", () => { scrubbing = false; });
 
   // ---------- options UI ----------
-  const GROUPS = [
+  const groups = () => [
     ["Shape", [
       ["seg", "style", "Draw as", [["mesh", "Surface"], ["points", "Dots"], ["wire", "Wireframe"]]],
       ["range", "strength", "Depth strength", 0, 2, 0.05],
@@ -286,10 +340,35 @@ void main(){
       ["toggle", "invert", "Flip near and far"],
     ]],
     ["Colour", [
-      ["seg", "color", "Colour from", [["video", "Video"], ["depth", "Depth"], ["heat", "Heat map"], ["bands", "Contours"]]],
+      ["seg", "color", "Colour from", [["video", "Video"], ["distance", "Distance colours"]]],
       ["range", "bright", "Brightness", 0.5, 1.5, 0.05],
       ["seg", "bg", "Background", [["dark", "Dark"], ["grey", "Grey"], ["light", "Light"]]],
     ]],
+    ...(opt.color !== "distance" ? [] : [
+      ["Distance colours", [
+        ["seg", "dPalette", "Palette", [["grey", "Grey"], ["turbo", "Turbo"], ["heat", "Heat"], ["viridis", "Viridis"], ["magma", "Magma"], ["ocean", "Ocean"], ["custom", "My colours"]]],
+        ...(opt.dPalette !== "custom" ? [] : [["color", "dFarCol", "Far colour"], ["color", "dMidCol", "Middle colour"], ["color", "dNearCol", "Near colour"]]),
+        ["toggle", "dFlip", "Reverse the palette"],
+        ["range", "dMix", "Blend with video (0 = video only)", 0, 100, 5],
+        ["range", "dSteps", "Colour steps (0 = smooth)", 0, 24, 1],
+        ["range", "dGamma", "Curve (below 1 spreads far, above 1 spreads near)", 0.3, 3, 0.05],
+      ]],
+      ["Distance range", [
+        ["note", "Spend the whole palette on just the distances you care about."],
+        ["range", "dLo", "Far limit", 0, 100, 1],
+        ["range", "dHi", "Near limit", 0, 100, 1],
+        ["toggle", "dHide", "Hide everything outside the limits"],
+      ]],
+      ["Contour lines", [
+        ["range", "lines", "Number of lines (0 = off)", 0, 40, 1],
+        ["range", "lineW", "Line thickness", 5, 50, 5],
+        ["color", "lineCol", "Line colour"],
+      ]],
+      ["Highlight a distance", [
+        ["toggle", "hl", "Highlight one distance"],
+        ...(!opt.hl ? [] : [["range", "hlPos", "Distance (far to near)", 0, 100, 1], ["range", "hlWidth", "Band width", 1, 20, 1], ["color", "hlCol", "Highlight colour"]]),
+      ]],
+    ]),
     ["Cut plane", [
       ["note", "Slices the scene at one depth, like a wall. Tip: map a point on the wall, then tap Cut here."],
       ["seg", "cutMode", "Mode", [["off", "Off"], ["behind", "Hide behind"], ["front", "Hide in front"], ["outline", "Outline only"]]],
@@ -313,7 +392,8 @@ void main(){
   }
   function buildOptions() {
     const root = $("st-options"); root.innerHTML = "";
-    for (const [title, items] of GROUPS) {
+    $("st-legend").hidden = opt.color !== "distance";
+    for (const [title, items] of groups()) {
       const det = el("details", "st-group"); det.open = openGroups.has(title);
       det.addEventListener("toggle", () => { det.open ? openGroups.add(title) : openGroups.delete(title); });
       det.appendChild(el("summary", null, title));
@@ -340,9 +420,13 @@ void main(){
           r.id = "opt-" + key; head.firstChild.htmlFor = r.id;
           r.oninput = () => { opt[key] = +r.value; val.textContent = r.value; applyOpt(key); };
           field.append(head, r);
+        } else if (kind === "color") {
+          const lab = el("label", "st-toggle"); const c = el("input"); c.type = "color"; c.value = opt[key]; c.id = "opt-" + key;
+          c.oninput = () => { opt[key] = c.value; applyOpt(key); };
+          lab.append(c, el("span", null, label)); field.appendChild(lab);
         } else if (kind === "toggle") {
           const lab = el("label", "st-toggle"); const c = el("input"); c.type = "checkbox"; c.checked = !!opt[key]; c.id = "opt-" + key;
-          c.onchange = () => { opt[key] = c.checked; applyOpt(key); };
+          c.onchange = () => { opt[key] = c.checked; applyOpt(key); if (key === "hl") buildOptions(); };
           lab.append(c, el("span", null, label)); field.appendChild(lab);
         }
         body.appendChild(field);
