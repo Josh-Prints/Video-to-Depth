@@ -59,7 +59,7 @@ jobs:
 
       - name: Install (local)
         if: env.BACKEND != 'space'
-        run: pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt kaggle
+        run: pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt "kaggle>=1.7.4.5" six
 
       - name: Get Video Depth Anything code
         if: env.BACKEND != 'space'
