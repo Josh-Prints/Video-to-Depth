@@ -24,16 +24,14 @@ BACKEND = (os.environ.get("BACKEND") or "local").lower()
 MAX_RES = int(os.environ.get("MAX_RES") or 1280)
 MAX_FPS = int(os.environ.get("MAX_FPS") or 30)
 ENCODER = os.environ.get("ENCODER") or "vits"           # vits (fast) or vitl (better, much slower on CPU)
-# "model:working size" pairs tried in order on Kaggle's GPU; each failure moves on to the next.
-# Measured on Kaggle's ~15 GB GPU: Large at 518 needs ~20 GB, Base at 518 misses by ~100 MB.
-KAGGLE_ENCODER = os.environ.get("KAGGLE_ENCODER") or "vitb:448,vitb:392,vits:518"
+# "model:working size" pairs tried in order on Kaggle's GPUs; each failure moves on to the next.
+# With the encoder batched and the head on the second GPU, Large at 518 fits (measured).
+KAGGLE_ENCODER = os.environ.get("KAGGLE_ENCODER") or "vitl:518,vitl:392,vitb:448,vits:518"
 INPUT_SIZE = int(os.environ.get("INPUT_SIZE") or 518)   # model working resolution, a multiple of 14
 
 
 PHOTO_MAX = int(os.environ.get("PHOTO_MAX") or 4096)    # longest side kept for a photo's depth PNG
 PHOTO_MODELS = (os.environ.get("PHOTO_MODELS") or "Large,Base,Small").split(",")
-# GPU memory in GB at working size 518 (Large and Base measured on Kaggle, Small a rough guess).
-MEM518 = {"vits": 6.0, "vitb": 14.7, "vitl": 20.0}
 ENC_BATCH = int(os.environ.get("ENC_BATCH") or 4)       # frames per encoder pass on GPU
 
 
@@ -48,12 +46,12 @@ def kaggle_plan(msg):
     if not m:
         return KAGGLE_ENCODER
     enc, size = m.group(1), max(196, min(518, int(m.group(2)) // 14 * 14))
-    plan = [f"{enc}:{size}"]
-    if enc != "vits" and size > 392:
+    plan = [f"{enc}:{size}"]                      # the choice, then only ever smaller
+    if size > 392:
         plan.append(f"{enc}:392")
-    for step in KAGGLE_ENCODER.split(","):
-        if step not in plan:
-            plan.append(step)
+    order = ["vitl", "vitb", "vits"]
+    for smaller in order[order.index(enc) + 1:]:
+        plan.append(f"{smaller}:392")
     return ",".join(plan)
 KAGGLE_TIMEOUT = int(os.environ.get("KAGGLE_TIMEOUT") or 3600)
 VDA_SHA = os.environ.get("VDA_SHA") or "4f5ae23172ba60fd7bc11ef671cca678842c7072"

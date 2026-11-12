@@ -233,14 +233,13 @@ a { color: var(--accent); }
             <div class="st-seg" id="q-model">
               <button data-m="vits">Small</button><button data-m="vitb">Base</button><button data-m="vitl">Large</button>
             </div>
-            <p class="muted">Bigger models judge depth more accurately and need more GPU memory.</p>
+            <p class="muted">Bigger models judge depth more accurately and take longer.</p>
           </div>
           <div class="st-field">
             <div class="st-rhead"><label class="st-label" for="q-size">Working resolution</label><span class="st-rval" id="q-size-val"></span></div>
             <input id="q-size" type="range" min="280" max="518" step="14">
-            <p class="muted">Higher keeps finer edges and needs more memory. The saved video size doesn't change.</p>
+            <p class="muted">Higher keeps finer edges and takes longer. The saved video size doesn't change.</p>
           </div>
-          <p id="q-fit" class="msg"></p>
           <p id="q-time" class="muted"></p>
         </div>
       </details>
@@ -577,20 +576,12 @@ a { color: var(--accent); }
 
   // ---------- quality choice ----------
   const MODELS = { vits: "Small", vitb: "Base", vitl: "Large" };
-  // GPU memory at working size 518, in GB. Large and Base were measured on Kaggle's 14.5 GB GPU
-  // (Large ran out asking for ~20, Base missed by ~0.1); Small is a rough guess. Scales with size squared.
-  const MEM518 = { vits: 6, vitb: 14.7, vitl: 20 }, GPU_GB = 14.5;
-  let quality = { model: "vitb", size: 448 };
+  let quality = { model: "vitl", size: 518 };
   try { const q = JSON.parse(ls.get("depthpass-quality") || "null"); if (q && MODELS[q.model]) quality = q; } catch {}
   function renderQuality() {
-    const need = MEM518[quality.model] * (quality.size / 518) ** 2;
     $("q-summary").textContent = `${MODELS[quality.model]} at ${quality.size}`;
     $("q-size").value = quality.size; $("q-size-val").textContent = quality.size;
     document.querySelectorAll("#q-model button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.m === quality.model)));
-    const fit = $("q-fit"), est = `Estimated ${need.toFixed(1)} GB of the GPU's ${GPU_GB} GB.`;
-    if (need <= GPU_GB * 0.9) { fit.className = "msg ok"; fit.textContent = `${est} Should fit.`; }
-    else if (need <= GPU_GB) { fit.className = "msg warn"; fit.textContent = `${est} Borderline. If it doesn't fit, the job steps down by itself.`; }
-    else { fit.className = "msg bad"; fit.textContent = `${est} Too big. The job will step down to a lower setting by itself.`; }
     ls.set("depthpass-quality", JSON.stringify(quality));
     $("q-time").textContent = timeText();
     $("q-summary").textContent += clipInfo && clipInfo.photo ? " (not used for photos)" : "";
@@ -599,7 +590,7 @@ a { color: var(--accent); }
   // ---------- time estimate ----------
   // Measured on Kaggle with a 9.5 s clip (13 chunks of 32 frames): seconds per chunk at working size 518,
   // and the fixed time around it (starting the machine, fetching the model, saving). Scales with size squared.
-  const SEC_PER_CHUNK = { vits: 3, vitb: 8, vitl: 20 }, FIXED_SEC = { vits: 110, vitb: 120, vitl: 150 }, PHOTO_SEC = 180;
+  const SEC_PER_CHUNK = { vits: 4.7, vitb: 8.4, vitl: 18.7 }, FIXED_SEC = { vits: 250, vitb: 250, vitl: 250 }, PHOTO_SEC = 180;
   let clipInfo = null;            // null = nothing picked, {photo: true}, or {seconds: number|null}
   function timeText() {
     if (!clipInfo) return "Choose a clip to see how long it should take.";
@@ -607,8 +598,7 @@ a { color: var(--accent); }
     if (!clipInfo.seconds) return "Couldn't read this clip's length, so no time estimate.";
     const chunks = Math.ceil(clipInfo.seconds * 30 / 22);
     const sec = FIXED_SEC[quality.model] + chunks * SEC_PER_CHUNK[quality.model] * (quality.size / 518) ** 2;
-    const fits = MEM518[quality.model] * (quality.size / 518) ** 2 <= GPU_GB * 2 * 0.8;
-    return `About ${Math.max(1, Math.round(sec / 60))} min for this ${clipInfo.seconds.toFixed(1)} s clip` + (fits ? "." : ", longer if it has to step down.");
+    return `About ${Math.max(1, Math.round(sec / 60))} min for this ${clipInfo.seconds.toFixed(1)} s clip.`;
   }
   function probeClip(file) {
     clipInfo = null;
