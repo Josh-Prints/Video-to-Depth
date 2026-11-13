@@ -918,13 +918,7 @@ void main(){
   let recorded = null, recording = false;
   async function exportColoured() {
     const btn = $("st-wexport"), msg = $("st-wexpmsg");
-    if (recorded) {                                          // second tap: hand the file to the share sheet
-      try {
-        if (navigator.canShare && navigator.canShare({ files: [recorded] })) await navigator.share({ files: [recorded] });
-        else { const a = document.createElement("a"); a.href = URL.createObjectURL(recorded); a.download = recorded.name; document.body.appendChild(a); a.click(); a.remove(); }
-      } catch {}
-      return;
-    }
+    if (recorded) { await DP.deliver(recorded, msg); return; }   // already made: save it again
     if (recording || !ccv.captureStream || typeof MediaRecorder === "undefined") {
       if (!recording) { msg.className = "msg bad"; msg.textContent = "This browser can't record video from the page."; }
       return;
@@ -946,11 +940,11 @@ void main(){
     const ext = type.includes("mp4") ? "mp4" : "webm";
     recorded = new File(chunks, `${(clip && clip.title) || "depth"}_coloured.${ext}`, { type: type.split(";")[0] });
     recording = false; btn.disabled = false;
-    btn.textContent = "Ready. Tap again to save";
-    msg.className = "msg ok"; msg.textContent = `Recorded (${(recorded.size / 1048576).toFixed(1)} MB). Changing a colour setting clears it.`;
+    msg.className = "msg ok"; msg.textContent = `Saved (${(recorded.size / 1048576).toFixed(1)} MB).`;
+    await DP.deliver(recorded, msg);
   }
   $("st-wexport").onclick = exportColoured;
-  const clearRecording = () => { if (recorded) { recorded = null; $("st-wexport").textContent = "Save coloured video"; $("st-wexpmsg").textContent = ""; } };
+  const clearRecording = () => { if (recorded) { recorded = null; $("st-wexpmsg").textContent = ""; const b = document.querySelector("#st-wcolor-opts .save-again"); if (b) b.remove(); } };
 
   // ---------- export the slice (what the cut keeps) ----------
   const scv = $("st-slice");
@@ -1014,12 +1008,6 @@ void main(){
     const tt = v === vBD || v === vBS ? t % Math.max(0.05, vBD.duration || 1) : t;
     v.addEventListener("seeked", done); v.currentTime = tt; setTimeout(done, 3000);
   })));
-  async function shareFile(file) {
-    try {
-      if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file] });
-      else { const a = document.createElement("a"); a.href = URL.createObjectURL(file); a.download = file.name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000); }
-    } catch {}
-  }
   const loadZip = () => window.JSZip ? Promise.resolve() : new Promise((res, rej) => {
     const sc = document.createElement("script"); sc.src = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
     sc.onload = res; sc.onerror = () => rej(new Error("Couldn't load the zip tool.")); document.head.appendChild(sc);
@@ -1029,7 +1017,7 @@ void main(){
    *  "merged" (the foreground composited over the background clip, MP4). */
   async function exportSlice(kind, btn) {
     const msg = $("st-xmsg"), label = btn.dataset.label;
-    if (ready[kind]) { await shareFile(ready[kind]); return; }
+    if (ready[kind]) { await DP.deliver(ready[kind], msg); return; }   // already made: save it again
     if (kind === "merged" && !bgOn()) { msg.className = "msg bad"; msg.textContent = "Choose a background clip first: Watch → Merged."; return; }
     if (!sliceActive()) { msg.className = "msg bad"; msg.textContent = "Set up a cut first: in 3D, open Cuts and set one to Hide behind or Hide in front."; return; }
     if (sliceRec) return;
@@ -1077,17 +1065,17 @@ void main(){
           ready[kind] = new File(chunks, `${base}${kind === "mask" ? "_mask" : ""}.${ext}`, { type: type.split(";")[0] });
         }
       }
-      btn.textContent = "Ready. Tap again to save";
-      msg.className = "msg ok"; msg.textContent = `Done (${(ready[kind].size / 1048576).toFixed(1)} MB). Changing the cut clears finished exports.`;
+      msg.className = "msg ok"; msg.textContent = `Saved ${ready[kind].name} (${(ready[kind].size / 1048576).toFixed(1)} MB).`;
+      await DP.deliver(ready[kind], msg);
     } catch (e) {
-      sliceRec = false; msg.className = "msg bad"; msg.textContent = e.message || String(e); btn.textContent = label;
+      sliceRec = false; msg.className = "msg bad"; msg.textContent = e.message || String(e);
     } finally {
       document.querySelectorAll("#st-xbtns button").forEach((b) => { b.disabled = false; });
     }
   }
   function clearExports() {
     for (const k of Object.keys(ready)) delete ready[k];
-    document.querySelectorAll("#st-xbtns button").forEach((b) => { b.textContent = b.dataset.label; });
+    const b = document.querySelector(".st-export .save-again"); if (b) b.remove();
   }
   document.querySelectorAll("#st-xbtns button").forEach((b) => { b.dataset.label = b.textContent; b.onclick = () => exportSlice(b.dataset.kind, b); });
 
