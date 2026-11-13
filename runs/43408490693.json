@@ -1,1 +1,1 @@
-{"run_id": "43408490693", "started": 1794565357, "stage": "converting", "file": "Josh-Prints__20261113-212122_IMG_2921.mov", "file_index": 1, "file_count": 1, "done": 0, "total": 0, "error": null, "updated": 1794565357}
+{"run_id": "43408490693", "started": 1794565357, "stage": "gpu", "file": "Josh-Prints__20261113-212122_IMG_2921.mov", "file_index": 1, "file_count": 1, "done": 0, "total": 26, "error": null, "updated": 1794565361, "gpu_started": 1794565361, "gpu_expected": 636, "gpu_spec": "vitl:518", "live": false}
