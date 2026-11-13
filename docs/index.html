@@ -124,6 +124,7 @@ details.fold > summary { font-size: 0.8rem; text-transform: uppercase; letter-sp
 .st-stage canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 #st-2d { touch-action: none; cursor: crosshair; }
 .st-export { display: grid; gap: 12px; }
+.save-again { justify-self: start; }
 .st-markers { position: absolute; inset: 0; pointer-events: none; }
 .st-dot { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; border: 2px solid #000;
   color: #000; font: 600 11px/18px var(--mono); text-align: center; box-shadow: 0 0 0 1px #fff; }
@@ -390,7 +391,7 @@ a { color: var(--accent); }
           <div id="st-files" class="st-files"></div>
           <section class="st-export">
             <h2>Export the slice</h2>
-            <p class="muted">The source video with everything the cut hides made see-through. Uses the cut you set in 3D → Cut plane.</p>
+            <p class="muted">The source video with everything the cut hides made see-through. Uses the cuts you set in 3D → Cuts.</p>
             <div id="st-xbtns" class="st-files">
               <button data-kind="png">Transparent PNG frames (zip)</button>
               <button class="secondary" data-kind="webm">Transparent video (WebM)</button>
@@ -912,30 +913,42 @@ a { color: var(--accent); }
     blobs.set(path, f);
     return f;
   }
+  /** Hand a finished file to the user straight away: a download on a computer, the share sheet on a phone.
+   *  Phones only allow the share sheet right after a tap, so if it's refused, a small Save file button
+   *  appears after `anchor` instead of anything changing the button that was pressed. */
+  async function deliver(file, anchor) {
+    if (anchor) { const old = anchor.parentElement.querySelector(".save-again"); if (old) old.remove(); }
+    const phone = !window.matchMedia("(pointer: fine)").matches;
+    const canShare = phone && navigator.canShare && navigator.canShare({ files: [file] });
+    if (!canShare) {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(file); a.download = file.name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+      return;
+    }
+    try { await navigator.share({ files: [file] }); }
+    catch (e) {
+      if (e.name === "AbortError" || !anchor) return;          // the user closed the share sheet
+      const b = document.createElement("button");
+      b.className = "secondary small save-again"; b.textContent = `Save file (${(file.size / 1048576).toFixed(1)} MB)`;
+      b.onclick = async () => { try { await navigator.share({ files: [file] }); b.remove(); } catch {} };
+      anchor.after(b);
+    }
+  }
   async function saveVideo(btn, path, name) {
     const label = btn.dataset.label;
     try {
-      const cached = blobs.has(path);
-      if (!cached) { btn.disabled = true; btn.textContent = "Fetching…"; }
+      btn.disabled = true; if (!blobs.has(path)) btn.textContent = "Fetching…";
       const file = await getFile(path, name);
-      btn.disabled = false;
-      const canShare = navigator.canShare && navigator.canShare({ files: [file] });
-      // iOS only opens the share sheet straight from a tap, so after a fresh download ask for a second tap.
-      if (canShare && !cached) { btn.textContent = "Ready. Tap again to save"; return; }
-      if (canShare) {
-        await navigator.share({ files: [file] });
-      } else {
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(file); a.download = name;
-        document.body.appendChild(a); a.click(); a.remove();
-        setTimeout(() => URL.revokeObjectURL(a.href), 30000);
-      }
-      btn.textContent = label;
+      btn.disabled = false; btn.textContent = label;
+      await deliver(file, btn);
     } catch (e) {
       btn.disabled = false;
-      btn.textContent = e.name === "AbortError" ? label : "Failed, tap to retry";
+      btn.textContent = "Failed, tap to retry";
     }
   }
+
   function whenOf(name) {
     const m = name.match(/^(\d{4})(\d\d)(\d\d)-(\d\d)(\d\d)(\d\d)_/);
     if (!m) return "";
@@ -960,7 +973,7 @@ a { color: var(--accent); }
     return previews.get(path);
   }
   const allClips = [];
-  window.DP = { getFile, saveVideo, urlFor, get clips() { return allClips; } };
+  window.DP = { getFile, saveVideo, urlFor, deliver, get clips() { return allClips; } };
 
   let lastSig = null;
   async function loadResults() {
@@ -1015,7 +1028,7 @@ a { color: var(--accent); }
   // ---------- version ----------
   // Bump APP_VERSION with each change to the site. The build line shows which commit Pages is serving,
   // so a stale cached page is easy to spot.
-  const APP_VERSION = "1.18";
+  const APP_VERSION = "1.19";
   // Load the clip-view code with the version in its address, so a new version can't run against a
   // stale cached copy (GitHub Pages lets browsers cache files for 10 minutes).
   const studioJs = document.createElement("script");
