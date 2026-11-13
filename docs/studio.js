@@ -282,15 +282,15 @@ void main(){
   window.addEventListener("resize", () => { if (open) fitStages(); });
 
   // ---------- background clip (merge) ----------
-  // Another clip used as the background: the foreground shows only where it is nearer than the
-  // background. The two depth maps have their own scales, so the foreground's depth is mapped into the
-  // background's scale with depth = a * foreground + b (Auto-match fits a and b). Cuts and points then
-  // work in the background's depth scale.
+  // Another clip (video or photo) shown behind this one: whatever the cuts remove from the foreground
+  // reveals the background. Nothing else changes: cuts always use the foreground's own depth.
+  // Points can be placed on either picture and read that picture's depth.
   const vBD = $("st-vbd"), vBS = $("st-vbs");
-  let merge = null;                            // {bg: clip name, a, b, bias} for the open clip
+  let merge = null;                            // {bg: clip name, pts: "fg"|"bg"} for the open clip
   let bgClip = null, bgReady = false;
   const bgOn = () => !!(merge && merge.bg && bgReady);
-  const mergeMap = () => (bgOn() ? [merge.a, merge.b] : [1, 0]);
+  const mergeMap = () => [1, 0];
+  const ptsOnBg = () => bgOn() && merge.pts === "bg";
   const saveMerge = () => clip && store.set("depthpass-merge:" + clip.name, merge);
   async function loadBg(name) {
     bgReady = false; bgClip = null;
@@ -316,30 +316,6 @@ void main(){
     if (playing()) { for (const v of [vBD, vBS]) if (v.paused) v.play().catch(() => {}); }
     else for (const v of [vBD, vBS]) if (!v.paused) v.pause();
   }
-  /** Fit a and b so the foreground's depth matches the background's, ignoring where they differ (the hand). */
-  function autoMatch() {
-    const W = 96, H = Math.max(2, Math.round(96 / aspect)), c = document.createElement("canvas"); c.width = W; c.height = H;
-    const x = c.getContext("2d", { willReadFrequently: true });
-    const grab = (v) => { x.drawImage(v, 0, 0, W, H); const d = x.getImageData(0, 0, W, H).data, o = new Float32Array(W * H); for (let i = 0; i < o.length; i++) o[i] = disp(d[i * 4] / 255); return o; };
-    const f = grab(vD), g = grab(vBD);
-    const spread = (o) => { let mn = 1, mx = 0; for (const x of o) { mn = Math.min(mn, x); mx = Math.max(mx, x); } return mx - mn; };
-    if (spread(f) < 0.02 || spread(g) < 0.02) return false;     // a blank frame: nothing to fit
-    let idx = [...f.keys()], a = 1, b = 0;
-    for (let it = 0; it < 4; it++) {                    // least squares, then drop the worst 30% and refit
-      let sf = 0, sg = 0, sff = 0, sfg = 0;
-      for (const i of idx) { sf += f[i]; sg += g[i]; sff += f[i] * f[i]; sfg += f[i] * g[i]; }
-      const n = idx.length, den = n * sff - sf * sf;
-      if (Math.abs(den) < 1e-9) break;
-      a = (n * sfg - sf * sg) / den; b = (sg - a * sf) / n;
-      idx.sort((i, j) => Math.abs(a * f[i] + b - g[i]) - Math.abs(a * f[j] + b - g[j]));
-      idx = idx.slice(0, Math.max(50, Math.floor(idx.length * 0.7)));
-    }
-    merge.a = Math.round(Math.max(0.05, Math.min(5, a)) * 1000) / 1000;
-    merge.b = Math.round(Math.max(-2, Math.min(2, b)) * 1000) / 1000;
-    saveMerge(); clearExports();
-    return true;
-  }
-
   // ---------- cuts ----------
   // Up to 4 cuts per clip, all applied at once (a pixel is hidden if any cut hides it).
   // {kind: "depth"|"plane", mode: "behind"|"front"|"outline"|"off", val: 0-100, pts: [i, j, k], off: nudge}
@@ -465,7 +441,7 @@ void main(){
   const samp = document.createElement("canvas"); samp.width = 320; samp.height = 180;
   const sctx = samp.getContext("2d", { willReadFrequently: true });
   function sampleDepths() {
-    const src = bgOn() ? vBD : vD;
+    const src = ptsOnBg() ? vBD : vD;
     if (!points.length || src.readyState < 2) return;
     sctx.drawImage(src, 0, 0, samp.width, samp.height);
     for (const p of points) {
@@ -501,12 +477,12 @@ void main(){
   let checker = null;
   function draw2D() {
     sizeCanvas(p2);
-    const v = bgOn() ? vBS : hasSrc ? vS : vD;
+    const v = ptsOnBg() ? vBS : hasSrc ? vS : vD;
     if (v.readyState < 2) return;
     const W = p2.width, H = p2.height;
     if (opt.pPreview && (cutArrays().active || bgOn()) && !sliceRec && initSliceGL()) {
       const scale = Math.min(1, W / (vD.videoWidth || W));
-      if (bgOn()) { drawSlice(2, scale); p2ctx.drawImage(scv, 0, 0, W, H); return; }   // merged result
+      if (bgOn()) { drawSlice(2, scale); p2ctx.drawImage(scv, 0, 0, W, H); return; }   // cuts reveal the background
       if (opt.pHidden === "checker") {
         if (!checker) { const c = document.createElement("canvas"); c.width = c.height = 24; const x = c.getContext("2d");
           x.fillStyle = "#666"; x.fillRect(0, 0, 24, 24); x.fillStyle = "#999"; x.fillRect(0, 0, 12, 12); x.fillRect(12, 12, 12, 12); checker = p2ctx.createPattern(c, "repeat"); }
@@ -523,7 +499,17 @@ void main(){
   }
   const pointGroups = () => [
     ["Cut preview", [
-      ...(bgOn() ? [["note", `Points sit on the background clip (${bgClip.title}) and read its depth.`]] : []),
+      ...(bgOn() ? [["custom", () => {
+        const f = el("div", "st-field"); f.appendChild(el("span", "st-label", "Place points on"));
+        const sg = el("div", "st-seg");
+        for (const [val, text] of [["fg", "Foreground (this clip)"], ["bg", `Background (${bgClip.title})`]]) {
+          const b = el("button", null, text); b.setAttribute("aria-pressed", String((merge.pts || "fg") === val));
+          b.onclick = () => { merge.pts = val; saveMerge(); points.forEach((p) => { p.d = null; }); buildPointOptions(); };
+          sg.appendChild(b);
+        }
+        f.append(sg, el("p", "muted", "Points show on that picture and read its depth."));
+        return f;
+      }]] : []),
       ["toggle", "pPreview", bgOn() ? "Show the merged result on this view" : "Show the cuts on this view"],
       ...(!opt.pPreview ? [] : [
         ["custom", cutsUI],
@@ -882,7 +868,7 @@ void main(){
   const mergeGroups = () => {
     const others = (DP.clips || []).filter((c) => c.name !== (clip && clip.name));
     return [["Background clip", [
-      ["note", "Pick the clip to use as the background, for example the empty wall. The foreground (this clip) shows only where it is nearer than the background. Cuts and points then use the background's depth."],
+      ["note", "Pick a clip or photo to show behind this one. Whatever your cuts remove from this clip shows the background instead. Cuts are set up exactly as without a background."],
       ["custom", () => {
         const sel = el("select"); sel.id = "merge-bg"; sel.setAttribute("aria-label", "Background clip");
         sel.appendChild(Object.assign(el("option", null, "None"), { value: "" }));
@@ -891,17 +877,13 @@ void main(){
         sel.onchange = async () => {
           merge.bg = sel.value || null; saveMerge();
           $("st-mmsg").className = "msg"; $("st-mmsg").textContent = merge.bg ? "Loading the background…" : "";
-          try { await loadBg(merge.bg); if (merge.bg) $("st-mmsg").textContent = autoMatch() ? "Background loaded and depth matched." : "Background loaded. Tap Auto-match depth once the picture shows."; }
+          try { await loadBg(merge.bg); if (merge.bg) $("st-mmsg").textContent = cutArrays().active ? "Background loaded." : "Background loaded. Add a cut (3D → Cuts or Points) to reveal it."; }
           catch (e) { $("st-mmsg").className = "msg bad"; $("st-mmsg").textContent = e.message; }
           clearExports(); buildMergeOptions();
         };
         return sel;
       }],
       ...(!bgOn() ? [] : [
-        ["buttons", "Depth match", ["Auto-match depth"], () => { const ok = autoMatch(); buildMergeOptions(); $("st-mmsg").className = ok ? "msg ok" : "msg bad"; $("st-mmsg").textContent = ok ? "Depth matched on this frame." : "Couldn't read the frames yet. Try again in a moment."; }],
-        ["mrange", "a", "Foreground depth scale", 0.05, 5, 0.01],
-        ["mrange", "b", "Foreground depth offset", -1, 1, 0.005],
-        ["mrange", "bias", "Push the foreground back (−) or forward (+)", -20, 20, 0.25],
         ["range", "edgeBlur", "Edge smoothing", 0, 8, 0.5],
         ["range", "edgeSoft", "Edge softness", 0, 8, 0.5],
       ]),
@@ -951,12 +933,11 @@ void main(){
   let sgl = null, sU = {}, sTexD = null, sTexC = null, sTexBD = null, sTexBC = null, sliceRec = false;
   // outMode 0: foreground with alpha (cut parts transparent), 1: mask (white = kept), 2: merged over the background.
   const SFS = (d) => `${AA(d)}precision mediump float;${CUT_GLSL}${BLUR_GLSL}
-uniform sampler2D C, BD, BC; uniform int outMode, merged; uniform float S, bias; uniform vec2 asp;
+uniform sampler2D C, BC; uniform int outMode; uniform float S; uniform vec2 asp;
 varying vec2 v;
 void main(){
   float dd = mA * blurDepth(D, v) + mB;
   float a = applyCuts(dd, vec2((v.x - 0.5) * asp.x, (0.5 - v.y) * asp.y), S);
-  if (merged == 1) a *= keep(dd - blurDepth(BD, v) - bias);   // foreground only where it is nearer than the background
   vec3 c = texture2D(C, v).rgb;
   if (outMode == 1) gl_FragColor = vec4(vec3(a), 1.0);
   else if (outMode == 2) gl_FragColor = vec4(mix(texture2D(BC, v).rgb, c, a), 1.0);
@@ -971,20 +952,20 @@ void main(){
     g.attachShader(pr, sh(g.VERTEX_SHADER, QUAD_VS));
     g.attachShader(pr, sh(g.FRAGMENT_SHADER, SFS(!!g.getExtension("OES_standard_derivatives"))));
     g.bindAttribLocation(pr, 0, "a"); g.linkProgram(pr); g.useProgram(pr);
-    for (const n of ["D", "C", "BD", "BC", "outMode", "merged", "S", "bias", "asp", "texel", "blurR", "invF", "soft", "mA", "mB"]) sU[n] = g.getUniformLocation(pr, n);
+    for (const n of ["D", "C", "BC", "outMode", "S", "asp", "texel", "blurR", "invF", "soft", "mA", "mB"]) sU[n] = g.getUniformLocation(pr, n);
     for (const n of ["ck", "cm", "cv", "cp"]) sU[n] = g.getUniformLocation(pr, n + "[0]");
     const tex = (unit) => { const t = g.createTexture(); g.activeTexture(g.TEXTURE0 + unit); g.bindTexture(g.TEXTURE_2D, t);
       for (const [k, val] of [[g.TEXTURE_MIN_FILTER, g.LINEAR], [g.TEXTURE_MAG_FILTER, g.LINEAR], [g.TEXTURE_WRAP_S, g.CLAMP_TO_EDGE], [g.TEXTURE_WRAP_T, g.CLAMP_TO_EDGE]]) g.texParameteri(g.TEXTURE_2D, k, val);
       return t; };
     sTexD = tex(0); sTexC = tex(1); sTexBD = tex(2); sTexBC = tex(3);
-    g.uniform1i(sU.D, 0); g.uniform1i(sU.C, 1); g.uniform1i(sU.BD, 2); g.uniform1i(sU.BC, 3);
+    g.uniform1i(sU.D, 0); g.uniform1i(sU.C, 1); g.uniform1i(sU.BC, 3);
     const b = g.createBuffer(); g.bindBuffer(g.ARRAY_BUFFER, b);
     g.bufferData(g.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), g.STATIC_DRAW);
     g.enableVertexAttribArray(0); g.vertexAttribPointer(0, 2, g.FLOAT, false, 0, 0);
     return true;
   }
-  /** True when an export would change anything: an active cut, or a background to merge with. */
-  const sliceActive = () => cutArrays().active > 0 || bgOn();
+  /** True when an export would change anything: at least one cut that hides something. */
+  const sliceActive = () => cutArrays().active > 0;
   function drawSlice(outMode, scale) {
     const g = sgl, on = bgOn();
     const w = Math.max(2, Math.round((vD.videoWidth || 2) * scale / 2) * 2), h = Math.max(2, Math.round((vD.videoHeight || 2) * scale / 2) * 2);
@@ -992,10 +973,9 @@ void main(){
     g.viewport(0, 0, w, h);
     const up = (unit, t, v) => { g.activeTexture(g.TEXTURE0 + unit); g.bindTexture(g.TEXTURE_2D, t); if (v.readyState >= 2) g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, v); };
     up(0, sTexD, vD); up(1, sTexC, hasSrc ? vS : vD);
-    if (on) { up(2, sTexBD, vBD); up(3, sTexBC, vBS); }
+    if (on) up(3, sTexBC, vBS);
     setCutUniforms(g, sU, opt.edgeSoft * scale);
-    g.uniform1i(sU.outMode, outMode === 2 && !on ? 0 : outMode); g.uniform1i(sU.merged, on ? 1 : 0);
-    g.uniform1f(sU.bias, on ? merge.bias / 100 : 0);
+    g.uniform1i(sU.outMode, outMode === 2 && !on ? 0 : outMode);
     g.uniform1f(sU.S, opt.strength); g.uniform1f(sU.invF, opt.invert ? 1 : 0);
     g.uniform2f(sU.texel, 1 / (vD.videoWidth || 1280), 1 / (vD.videoHeight || 720));
     g.uniform1f(sU.blurR, opt.edgeBlur);
@@ -1018,7 +998,7 @@ void main(){
   async function exportSlice(kind, btn) {
     const msg = $("st-xmsg"), label = btn.dataset.label;
     if (ready[kind]) { await DP.deliver(ready[kind], msg); return; }   // already made: save it again
-    if (kind === "merged" && !bgOn()) { msg.className = "msg bad"; msg.textContent = "Choose a background clip first: Watch → Merged."; return; }
+    if (kind === "merged" && !bgOn()) { msg.className = "msg bad"; msg.textContent = "Choose a background first: Watch → Merged."; return; }
     if (!sliceActive()) { msg.className = "msg bad"; msg.textContent = "Set up a cut first: in 3D, open Cuts and set one to Hide behind or Hide in front."; return; }
     if (sliceRec) return;
     if (!initSliceGL()) { msg.className = "msg bad"; msg.textContent = "This browser couldn't start the export."; return; }
@@ -1142,7 +1122,7 @@ void main(){
     master = hasSrc ? vS : vD;
     points = store.get("depthpass-pts:" + c.name, []).map((p) => ({ u: p.u, v: p.v, m: p.m ?? null, d: null })); selected = -1;
     loadCuts(c.name);
-    merge = { bg: null, a: 1, b: 0, bias: 0, ...store.get("depthpass-merge:" + c.name, {}) };
+    merge = { bg: null, pts: "fg", ...store.get("depthpass-merge:" + c.name, {}) };
     try {
       const [fd, fs] = await Promise.all([DP.getFile(c.depth.path, c.depth.name), hasSrc ? DP.getFile(c.src.path, c.src.name) : null]);
       if (clip !== c) return;
